@@ -53,13 +53,13 @@ We are going to change one thing about the loop.
 Chapter 2:
 
 ```ts
-runTurn(conversation, prompt)
+runTurn(conversation, prompt);
 ```
 
 Chapter 3:
 
 ```ts
-await runTurn(conversation, prompt, modelClient)
+await runTurn(conversation, prompt, modelClient);
 ```
 
 That one extra argument gives the loop a dependency it can call. Tests pass an echo client. The CLI can pass either echo or OpenAI.
@@ -198,9 +198,7 @@ const useOpenAI = args.includes("--openai");
 const prompt = args.filter((arg) => arg !== "--openai").join(" ");
 
 if (prompt.length === 0) {
-  console.error(
-    'Usage: npm run dev -- [--openai] "your prompt"',
-  );
+  console.error('Usage: npm run dev -- [--openai] "your prompt"');
   process.exit(1);
 }
 
@@ -347,10 +345,7 @@ It is not pretending to be intelligent. It gives the tests a stable oracle.
 `runTurn` becomes async because real model calls are async:
 
 ```ts
-const assistantContent = await modelClient.createResponse(
-  prompt,
-  conversation,
-);
+const assistantContent = await modelClient.createResponse(prompt, conversation);
 ```
 
 That is the main design pressure introduced in this chapter. Once the agent loop crosses a network boundary, the rest of the loop must be able to wait.

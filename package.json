@@ -10,6 +10,9 @@
   },
   "scripts": {
     "build": "bun build src/cli.ts --outfile dist/cli.js --target bun",
+    "lint": "eslint src tests eslint.config.js",
+    "format": "prettier src tests docs package.json tsconfig.json eslint.config.js prettier.config.js --write",
+    "format:check": "prettier src tests docs package.json tsconfig.json eslint.config.js prettier.config.js --check",
     "test": "bun test",
     "dev": "bun run src/cli.ts"
   },
@@ -17,7 +20,11 @@
     "openai": "^6.34.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.24.0",
     "bun-types": "^1.3.5",
+    "eslint": "^9.24.0",
+    "prettier": "^3.5.3",
+    "typescript-eslint": "^8.31.0",
     "typescript": "^6.0.3"
   }
 }

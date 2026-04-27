@@ -2,7 +2,7 @@
 
 ## Where We Are
 
-If you are recreating this chapter from scratch, start in a fresh project directory and run `bun init -y` to create the package root. By the end of this chapter, `ty-term` is a small Bun TypeScript project:
+Start in a fresh project directory and run `bun init -y` to create the package root. By the end of this chapter, `ty-term` is a small Bun TypeScript project:
 
 ```text
 ty-term/
@@ -12,13 +12,11 @@ ty-term/
   tests/
 ```
 
-The build step writes a bundled CLI to `dist/cli.js`. The program still does almost nothing. It accepts one command-line prompt and prints a fixed response. That is enough for this chapter: prove the package wiring, the Bun bundle, the test runner, and the CLI entry point.
+The goal here is to setup everything and make sure it works. We'll build a CLI that accepts one command-line prompt and prints a fixed response. Prove the package wiring, the Bun bundle, the test runner, and the CLI entry point.
 
 ## Learning Objective
 
 Set up the smallest Bun-driven TypeScript CLI that can be bundled, tested, and run on repeat.
-
-The fake response is just a placeholder. The real outcome is a clean development loop:
 
 ```bash
 bun install
@@ -283,7 +281,7 @@ The CLI takes one prompt from command-line arguments. It is not interactive.
 
 There is one package rooted at `ty-term`, so the layout stays fixed across the book.
 
-There is no linting, formatting, or docs site yet. Bun, TypeScript, and tests are enough for the first runnable slice.
+ESLint and Prettier are configured in the repo, but this chapter leaves them out for brevity. Bun, TypeScript, and tests are enough for the first runnable slice.
 
 ## Handoff to Chapter 2
 

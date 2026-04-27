@@ -258,9 +258,7 @@ export async function runTurnWithTools(
 }
 
 export function parseToolRequest(text: string): ToolRequest | undefined {
-  const match = text
-    .trim()
-    .match(/^TOOL ([a-zA-Z0-9_-]+)(?:\s*:\s*(.*))?$/);
+  const match = text.trim().match(/^TOOL ([a-zA-Z0-9_-]+)(?:\s*:\s*(.*))?$/);
 
   if (!match) {
     return undefined;
@@ -578,9 +576,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error(
-      'Usage: npm run dev -- [--openai] "your prompt"',
-    );
+    console.error('Usage: npm run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 

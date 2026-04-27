@@ -454,9 +454,7 @@ import {
 Add a tiny recording model helper:
 
 ```ts
-function createRecordingModelClient(
-  responses: string[],
-): ModelClient & {
+function createRecordingModelClient(responses: string[]): ModelClient & {
   calls: Array<Parameters<ModelClient["createResponse"]>>;
 } {
   const calls: Array<Parameters<ModelClient["createResponse"]>> = [];
@@ -583,9 +581,7 @@ describe("project instructions", () => {
     expect(calls).toEqual([
       {
         model: "test-model",
-        instructions: buildModelInstructions(
-          "Use repo-local conventions.\n",
-        ),
+        instructions: buildModelInstructions("Use repo-local conventions.\n"),
         input: "assistant: earlier\nuser: hello\nhello",
       },
     ]);

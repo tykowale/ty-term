@@ -349,9 +349,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error(
-      'Usage: npm run dev -- [--openai] "your prompt"',
-    );
+    console.error('Usage: npm run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -442,22 +440,14 @@ describe("tool registry", () => {
       createCurrentDirectoryTool({ cwd: "/learn/harness" }),
     ]);
 
-    await expect(executeTool(registry, "cwd")).resolves.toBe(
-      "/learn/harness",
-    );
+    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
   });
 
   it("passes input to a named tool", async () => {
-    const registry = createToolRegistry([
-      createBashTool({ timeoutMs: 1000 }),
-    ]);
+    const registry = createToolRegistry([createBashTool({ timeoutMs: 1000 })]);
 
     await expect(
-      executeTool(
-        registry,
-        "bash",
-        nodeCommand("process.stdout.write('ok')"),
-      ),
+      executeTool(registry, "bash", nodeCommand("process.stdout.write('ok')")),
     ).resolves.toContain("stdout:\nok");
   });
 
@@ -588,7 +578,7 @@ The core function is:
 export async function executeCommand(
   command: string,
   options?: CommandOptions,
-): Promise<string>
+): Promise<string>;
 ```
 
 It does not know about the CLI, the model, or conversations. It only knows how to run one command and turn the result into a stable string.

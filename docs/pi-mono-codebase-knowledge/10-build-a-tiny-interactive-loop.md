@@ -587,7 +587,9 @@ describe("chapter 10 interactive loop", () => {
         { role: "assistant", content: "saw tool read_file: hello file\n" },
       ]);
 
-      const bashRequestingModel = createRecordingModelClient(["TOOL bash: pwd"]);
+      const bashRequestingModel = createRecordingModelClient([
+        "TOOL bash: pwd",
+      ]);
       await expect(
         runTurnWithTools([], "try bash", bashRequestingModel, registry),
       ).rejects.toThrow("Unknown tool: bash");

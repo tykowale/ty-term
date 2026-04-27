@@ -236,9 +236,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error(
-      'Usage: npm run dev -- [--openai] "your prompt"',
-    );
+    console.error('Usage: npm run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -319,9 +317,7 @@ describe("tool registry", () => {
     const registry = createToolRegistry([
       createCurrentDirectoryTool({ cwd: "/learn/harness" }),
     ]);
-    await expect(executeTool(registry, "cwd")).resolves.toBe(
-      "/learn/harness",
-    );
+    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
   });
 
   it("reports unknown tools", async () => {

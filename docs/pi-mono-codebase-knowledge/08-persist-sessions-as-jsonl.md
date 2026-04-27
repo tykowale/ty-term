@@ -263,7 +263,7 @@ That means this existing history:
 [
   { role: "user", content: "earlier" },
   { role: "assistant", content: "agent heard: earlier" },
-]
+];
 ```
 
 followed by a new `hello` turn appends only:
@@ -272,7 +272,7 @@ followed by a new `hello` turn appends only:
 [
   { role: "user", content: "hello" },
   { role: "assistant", content: "agent heard: hello" },
-]
+];
 ```
 
 ## `src/cli.ts`
@@ -511,7 +511,9 @@ describe("session persistence", () => {
         { role: "assistant", content: "agent heard: hello" },
       ]);
 
-      await expect(loadSessionMessages(projectRoot, "lesson-8")).resolves.toEqual([
+      await expect(
+        loadSessionMessages(projectRoot, "lesson-8"),
+      ).resolves.toEqual([
         { role: "user", content: "hello" },
         { role: "assistant", content: "agent heard: hello" },
       ]);
@@ -544,7 +546,9 @@ describe("session persistence", () => {
         { role: "user", content: "hello" },
         { role: "assistant", content: "agent heard: hello" },
       ]);
-      await expect(loadSessionMessages(projectRoot, "lesson-8")).resolves.toEqual([
+      await expect(
+        loadSessionMessages(projectRoot, "lesson-8"),
+      ).resolves.toEqual([
         { role: "user", content: "earlier" },
         { role: "assistant", content: "agent heard: earlier" },
         { role: "user", content: "hello" },
@@ -575,7 +579,11 @@ describe("session persistence", () => {
 One subtle case is multiline content. JSONL still stores it as one record because `JSON.stringify` escapes newline characters inside the JSON string:
 
 ```jsonl
-{"role":"tool","name":"read_file","content":"line one\nline two\n"}
+{
+  "role": "tool",
+  "name": "read_file",
+  "content": "line one\nline two\n"
+}
 ```
 
 That is still one physical line in the file.
