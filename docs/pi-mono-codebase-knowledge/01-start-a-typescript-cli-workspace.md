@@ -1,63 +1,56 @@
-# Chapter 1: Start a TypeScript CLI
+# Chapter 1: Start a Bun TypeScript CLI
 
 ## Where We Are
 
-We are starting from an empty `ty-term/` directory.
-
-By the end of this chapter, `ty-term` will be a real, buildable Node TypeScript project:
+If you are recreating this chapter from scratch, start in a fresh project directory and run `bun init -y` to create the package root. By the end of this chapter, `ty-term` is a small Bun TypeScript project:
 
 ```text
 ty-term/
   package.json
   tsconfig.json
-  vitest.config.ts
   src/
   tests/
 ```
 
-The agent will not call a model yet. It will not read files, run tools, or hold a conversation. It will only accept one command-line prompt and print a fake response.
-
-That is intentional. Chapter 1 proves the wiring: npm, TypeScript build, test runner, and CLI execution.
+The build step writes a bundled CLI to `dist/cli.js`. The program still does almost nothing. It accepts one command-line prompt and prints a fixed response. That is enough for this chapter: prove the package wiring, the Bun bundle, the test runner, and the CLI entry point.
 
 ## Learning Objective
 
-Learn how to set up a small TypeScript package for a terminal coding harness.
+Set up the smallest Bun-driven TypeScript CLI that can be bundled, tested, and run on repeat.
 
-The important idea is not the fake agent response. The important idea is that we now have a repeatable development loop:
+The fake response is just a placeholder. The real outcome is a clean development loop:
 
 ```bash
-npm install
-npm run build
-npm test
-npm run dev -- "hello"
+bun install
+bun run build
+bun test
+bun run dev -- "hello"
 ```
 
-The oracle for this chapter is:
+Expected output:
 
 ```text
 agent heard: hello
 ```
 
-If you can build, test, and run that command, the chapter is complete.
+If that command works, the chapter is done.
 
 ## Prerequisites
 
-Install Node.js 24 LTS. This chapter was refreshed against Node `24.12.0` and npm `11.12.1`.
+Use Bun `1.3.5`. This chapter was refreshed against Bun `1.3.5`.
 
-TypeScript 7 is available as a beta through `@typescript/native-preview@beta`, but this chapter stays on stable `typescript@6.0.3`. The TypeScript 7 beta uses the separate `tsgo` command today, so adopting it would add a compiler comparison to a chapter that is meant to teach package wiring.
+Keep stable TypeScript `6.0.3` for editor and type-checking support. Bun handles the bundle and the tests.
 
 ## Build The Repo
 
-Start from the parent directory where you want the book project to live.
+If you are recreating this chapter from scratch, start in the directory where the project should live.
 
 ```bash
-mkdir ty-term
-cd ty-term
 mkdir -p src
 mkdir -p tests
 ```
 
-Initialize the package files manually. We are avoiding scaffolding tools because the goal is to see every moving part.
+Initialize the package with `bun init -y`, then add the files below. The layout stays small on purpose.
 
 ## `ty-term/package.json`
 
@@ -68,40 +61,32 @@ Initialize the package files manually. We are avoiding scaffolding tools because
   "version": "0.1.0",
   "description": "A minimal terminal coding harness built as a teaching project.",
   "type": "module",
-  "packageManager": "npm@11.12.1",
+  "packageManager": "bun@1.3.5",
   "bin": {
     "hobby-agent": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "dev": "tsx src/cli.ts"
+    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun",
+    "test": "bun test",
+    "dev": "bun run src/cli.ts"
   },
   "dependencies": {
     "openai": "^6.34.0"
   },
   "devDependencies": {
-    "@types/node": "^24.12.2",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "bun-types": "^1.3.5",
+    "typescript": "^6.0.3"
   }
 }
 ```
 
-This manifest owns the runnable program and the project tooling.
-
-We install conservative foundation dependencies up front:
+This manifest owns the CLI, the bundle, and the test command. The dependencies are the minimum foundation for later chapters:
 
 - `openai` for the model-provider chapter later in the book
-- `typescript` for type checking and build output
-- `tsx` for running TypeScript directly during development
-- `vitest` for tests
-- `@types/node` for Node 24 globals like `process`
+- `bun-types` for Bun globals and `bun:test`
+- `typescript` for editor and type-checking support
 
-We install `openai` up front because Chapter 1 owns setup for the whole main path. Chapter 3 will be the first chapter that uses it, and tests will still run without an API key.
+`openai` is installed early so later chapters can use it without changing the project shape. Nothing in this chapter depends on an API key.
 
 ## `ty-term/tsconfig.json`
 
@@ -109,47 +94,28 @@ We install `openai` up front because Chapter 1 owns setup for the whole main pat
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "lib": ["ES2022"],
-    "types": ["node"],
+    "types": ["bun-types"],
     "strict": true,
-    "declaration": true,
-    "sourceMap": true,
+    "noEmit": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "rootDir": "src",
-    "outDir": "dist"
+    "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
 }
 ```
 
-This config builds only `src/`.
+The compiler config is for editor and type-checking support now. Bun owns the actual bundle, so `tsconfig.json` only needs to understand the source graph and the test files.
 
-Tests live at `tests/`, but they are not emitted to `dist/`. Vitest can run TypeScript tests directly, so the build output stays focused on the CLI.
-
-The most important choices are:
+The key settings are:
 
 - `strict: true`, so the project starts with useful type checking.
-- `module: NodeNext`, so TypeScript follows modern Node ESM rules.
-- `declaration: true`, so the build can produce `.d.ts` files.
-- `rootDir` and `outDir`, so source files build from `src/` into `dist/`.
-
-## `ty-term/vitest.config.ts`
-
-```ts
-import { defineConfig } from "vitest/config";
-
-export default defineConfig({
-  test: {
-    include: ["tests/**/*.test.ts"]
-  }
-});
-```
-
-The config is intentionally small. It makes the test location explicit without introducing aliases or framework-specific structure.
+- `moduleResolution: "Bundler"`, so TypeScript accepts the same extensionless imports Bun bundles.
+- `types: ["bun-types"]`, so the test runner and Bun globals are available to the checker.
+- `noEmit: true`, so `tsc` stays in the background while Bun produces the runnable bundle.
 
 ## `ty-term/src/index.ts`
 
@@ -165,18 +131,14 @@ export function respondToPrompt(prompt: string): string {
 }
 ```
 
-This is deliberately fake.
+This is a placeholder on purpose. Later chapters will replace it with model calls, parsing, and tool use. For now, `respondToPrompt` gives us one stable function to test and call from the terminal.
 
-A real coding harness will eventually send messages to a model, parse the model's response, and maybe execute tools. Chapter 1 does none of that.
-
-For now, `respondToPrompt` gives us a stable behavior to test and run from the terminal.
-
-The small empty-prompt branch gives the function one real edge case without turning this chapter into validation infrastructure.
+The empty-input branch adds one real edge case without turning this chapter into validation infrastructure.
 
 ## `ty-term/src/cli.ts`
 
 ```ts
-import { respondToPrompt } from "./index.js";
+import { respondToPrompt } from "./index";
 
 const prompt = process.argv.slice(2).join(" ");
 const response = respondToPrompt(prompt);
@@ -184,23 +146,21 @@ const response = respondToPrompt(prompt);
 console.log(response);
 ```
 
-The CLI is only an adapter.
-
-It reads command-line arguments, turns them into one prompt string, calls `respondToPrompt`, and prints the result.
+The CLI is only an adapter: it reads arguments, joins them into one prompt, calls `respondToPrompt`, and prints the result.
 
 Notice the import path:
 
 ```ts
-import { respondToPrompt } from "./index.js";
+import { respondToPrompt } from "./index";
 ```
 
-The `.js` extension is intentional even though the source file is `index.ts`. With `module: "NodeNext"` and `moduleResolution: "NodeNext"`, TypeScript checks that relative ESM imports match the JavaScript paths Node will load after compilation.
+The source stays extensionless on purpose. Bun resolves that path while bundling, and `moduleResolution: "Bundler"` lets TypeScript validate the same source-level import.
 
 ## `ty-term/tests/respond-to-prompt.test.ts`
 
 ```ts
-import { describe, expect, it } from "vitest";
-import { respondToPrompt } from "../src/index.js";
+import { describe, expect, it } from "bun:test";
+import { respondToPrompt } from "../src/index";
 
 describe("respondToPrompt", () => {
   it("echoes a fake agent response for a prompt", () => {
@@ -213,36 +173,46 @@ describe("respondToPrompt", () => {
 });
 ```
 
-This test locks down the tiny behavior we have.
+This test locks down the only behavior in the chapter. It is not testing model quality; it is checking that the program boundary is callable and predictable.
 
-It is not testing model intelligence. It is testing that the first boundary of the program is callable and predictable.
-
-That matters because future chapters will replace the fake implementation with real conversation and model behavior. When that happens, the tests will move with the concept.
+Later chapters will swap in real conversation logic, and the tests will follow that boundary.
 
 ## Try It
 
 Install dependencies:
 
 ```bash
-npm install
+bun install
 ```
 
-Build the package:
+Build the bundle:
 
 ```bash
-npm run build
+bun run build
 ```
 
 Run the tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run the CLI in development mode:
 
 ```bash
-npm run dev -- "hello"
+bun run dev -- "hello"
+```
+
+Expected output:
+
+```text
+agent heard: hello
+```
+
+Run the bundled CLI directly:
+
+```bash
+bun run dist/cli.js -- "hello"
 ```
 
 Expected output:
@@ -254,7 +224,7 @@ agent heard: hello
 Try the empty prompt too:
 
 ```bash
-npm run dev
+bun run dev
 ```
 
 Expected output:
@@ -263,28 +233,25 @@ Expected output:
 agent needs a prompt
 ```
 
-The chapter oracle is complete when all of these work:
+The chapter is complete when all of these work:
 
 ```bash
-npm install
-npm run build
-npm test
-npm run dev -- "hello"
+bun install
+bun run build
+bun test
+bun run dist/cli.js -- "hello"
 ```
 
 ## How It Works
 
-The project has two layers.
-
-First, the package root owns commands, dependencies, and compiler configuration:
+The project has two layers. The package root owns Bun commands, dependencies, and compiler configuration:
 
 ```text
 ty-term/package.json
 ty-term/tsconfig.json
-ty-term/vitest.config.ts
 ```
 
-Second, the source files separate behavior from the terminal adapter:
+The source files split behavior from the terminal adapter:
 
 ```text
 src/index.ts
@@ -300,38 +267,28 @@ terminal args
   -> console.log(response)
 ```
 
-The invariant is simple:
+Bun's bundler turns that source graph into `dist/cli.js`. The invariant is simple: `respondToPrompt` takes a string and returns a string. It does not read the terminal, print, call a model, or touch the filesystem.
 
-`respondToPrompt` accepts a string and returns a string. It does not read from the terminal, write to stdout, call a model, or touch the filesystem.
-
-That makes it easy to test.
-
-The CLI owns side effects. The function owns behavior.
-
-This is the first tiny version of a pattern we will keep using: isolate the part that decides what should happen from the part that talks to the outside world.
+The CLI owns side effects. The function owns behavior. That separation is the pattern this book keeps using.
 
 ## Reference Note
 
-Compare this tiny CLI wrapper with `pi-mono/packages/agent/src/agent-loop.ts` and `pi-mono/packages/coding-agent/src/core/agent-session.ts`.
-
-`pi-mono` has a real agent loop, model calls, tools, session state, and TUI. Chapter 1 simplifies all of that away so we can prove only npm, TypeScript, tests, and CLI argument flow.
+Compare this wrapper with the real agent loop and session code in the reference project. Chapter 1 strips all of that away so we can focus on Bun, TypeScript, tests, and argument flow.
 
 ## Simplifications
 
-The agent response is static. It does not use a language model.
+The response is static and model-free.
 
-The CLI accepts one prompt as command-line arguments. It is not interactive.
+The CLI takes one prompt from command-line arguments. It is not interactive.
 
-There is one npm package rooted at `ty-term`. The book keeps one layout so the learner can focus on harness behavior instead of repository structure.
+There is one package rooted at `ty-term`, so the layout stays fixed across the book.
 
-There is no linting or formatting setup yet. TypeScript and tests are enough for the first runnable slice.
-
-There is no README or documentation site in the build. The book chapter itself is the guide for now.
+There is no linting, formatting, or docs site yet. Bun, TypeScript, and tests are enough for the first runnable slice.
 
 ## Handoff to Chapter 2
 
-Chapter 1 created a working shell around fake behavior.
+Chapter 1 leaves us with a working shell around fake behavior.
 
-Chapter 2 replaces the single prompt string with a conversation representation. The next useful artifact is likely an `AgentMessage` type with roles like `user` and `assistant`.
+Chapter 2 replaces the single prompt string with a conversation representation. The next useful artifact is likely an `AgentMessage` type with `user` and `assistant` roles.
 
-The Chapter 2 oracle should show the program constructing a small conversation and producing an inspectable representation, still without calling a model.
+The next check should show the program building a small conversation and printing something inspectable, still without a model call.

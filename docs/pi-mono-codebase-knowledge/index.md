@@ -26,7 +26,7 @@ Chapter 1 owns setup. If a later chapter needs a new dependency, Chapter 1 must 
 
 ## Core Chapters
 
-1. [Start a TypeScript CLI](01-start-a-typescript-cli-workspace.md)
+1. [Start a Bun TypeScript CLI](01-start-a-typescript-cli-workspace.md)
 2. [Represent a Conversation](02-represent-a-conversation.md)
 3. [Call One Model Provider](03-call-one-model-provider.md)
 4. [Add a Tool Boundary](04-add-a-tool-boundary.md)

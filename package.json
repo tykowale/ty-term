@@ -4,24 +4,20 @@
   "version": "0.1.0",
   "description": "A minimal terminal coding harness built as a teaching project.",
   "type": "module",
-  "packageManager": "npm@11.12.1",
+  "packageManager": "bun@1.3.5",
   "bin": {
     "hobby-agent": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "dev": "tsx src/cli.ts"
+    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun",
+    "test": "bun test",
+    "dev": "bun run src/cli.ts"
   },
   "dependencies": {
     "openai": "^6.34.0"
   },
   "devDependencies": {
-    "@types/node": "^24.12.2",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "bun-types": "^1.3.5",
+    "typescript": "^6.0.3"
   }
 }
