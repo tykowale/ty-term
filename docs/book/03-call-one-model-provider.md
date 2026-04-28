@@ -24,7 +24,7 @@ By the end of this chapter, the harness will:
 
 - define a `ModelClient` interface
 - keep a no-key `createEchoModelClient()` for tests and local learning
-- add one real provider through the official `openai` npm package
+- add one real provider through the official `openai` package
 - make `runTurn` async
 - keep tests deterministic by using the echo client only
 - let the CLI run without an API key by default
@@ -36,8 +36,10 @@ The chapter stays runnable for every reader. A real model call is optional.
 Chapter 1's root `package.json` should already include `openai`:
 
 ```json
-"dependencies": {
-  "openai": "^6.34.0"
+{
+  "dependencies": {
+    "openai": "^6.34.0"
+  }
 }
 ```
 
@@ -75,25 +77,21 @@ If your Chapter 1 file does not already include `openai`, update it now:
   "version": "0.1.0",
   "description": "A minimal terminal coding harness built as a teaching project.",
   "type": "module",
-  "packageManager": "npm@11.12.1",
+  "packageManager": "bun@1.3.5",
   "bin": {
     "hobby-agent": "./dist/cli.js"
   },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
-    "dev": "tsx src/cli.ts"
+    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun",
+    "test": "bun test",
+    "dev": "bun run src/cli.ts"
   },
   "dependencies": {
     "openai": "^6.34.0"
   },
   "devDependencies": {
-    "@types/node": "^24.12.2",
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "bun-types": "^1.3.5",
+    "typescript": "^6.0.3"
   }
 }
 ```
@@ -183,7 +181,7 @@ export function renderTranscript(conversation: Conversation): string {
 ## `src/cli.ts`
 
 ```ts
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 import {
   type Conversation,
@@ -191,14 +189,14 @@ import {
   createOpenAIModelClient,
   renderTranscript,
   runTurn,
-} from "./index.js";
+} from "./index";
 
 const args = process.argv.slice(2);
 const useOpenAI = args.includes("--openai");
 const prompt = args.filter((arg) => arg !== "--openai").join(" ");
 
 if (prompt.length === 0) {
-  console.error('Usage: npm run dev -- [--openai] "your prompt"');
+  console.error('Usage: bun run dev -- [--openai] "your prompt"');
   process.exit(1);
 }
 
@@ -223,13 +221,13 @@ The CLI uses a flag instead of silently switching when `OPENAI_API_KEY` exists. 
 Update the Chapter 2 test file with this behavior-focused version:
 
 ```ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   createEchoModelClient,
   renderTranscript,
   runTurn,
   type Conversation,
-} from "../src/index.js";
+} from "../src/index";
 
 describe("runTurn", () => {
   it("adds a user message followed by the model response", async () => {
@@ -266,25 +264,25 @@ Tests use `createEchoModelClient()` only. They do not need network access, crede
 Install dependencies if needed:
 
 ```bash
-npm install
+bun install
 ```
 
 Build:
 
 ```bash
-npm run build
+bun run build
 ```
 
 Run tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run the CLI without an API key:
 
 ```bash
-npm run dev -- "hello"
+bun run dev -- "hello"
 ```
 
 Expected output:
@@ -297,7 +295,7 @@ assistant: agent heard: hello
 Optionally call the real provider:
 
 ```bash
-OPENAI_API_KEY=your_api_key npm run dev -- --openai "Explain what a model boundary is in one sentence"
+OPENAI_API_KEY=your_api_key bun run dev -- --openai "Explain what a model boundary is in one sentence"
 ```
 
 Expected shape:
@@ -312,7 +310,7 @@ The exact assistant text will vary because this command calls a real model.
 You can choose a different model without changing code:
 
 ```bash
-OPENAI_API_KEY=your_api_key OPENAI_MODEL=gpt-5.2 npm run dev -- --openai "Say hello from the harness"
+OPENAI_API_KEY=your_api_key OPENAI_MODEL=gpt-5.2 bun run dev -- --openai "Say hello from the harness"
 ```
 
 ## How It Works

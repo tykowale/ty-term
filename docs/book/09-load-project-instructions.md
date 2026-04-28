@@ -338,7 +338,7 @@ import {
   runSessionTurn,
   runTurnWithTools,
   validateSessionId,
-} from "./index.js";
+} from "./index";
 ```
 
 Then update `main`:
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: npm run dev -- [--session id] [--openai] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
     );
     process.exit(1);
   }
@@ -448,7 +448,7 @@ import {
   runTurn,
   runTurnWithTools,
   validateSessionId,
-} from "../src/index.js";
+} from "../src/index";
 ```
 
 Add a tiny recording model helper:
@@ -596,13 +596,13 @@ The recording model is better than changing the echo model here. It proves conte
 Run the tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run TypeScript:
 
 ```bash
-npm run build -- --noEmit --pretty false
+bun run build
 ```
 
 Create project instructions:
@@ -614,7 +614,7 @@ printf "Use small patches.\n" > AGENTS.md
 Run a normal prompt:
 
 ```bash
-npm run dev -- "hello"
+bun run dev -- "hello"
 ```
 
 Expected shape with the echo model:
@@ -627,13 +627,13 @@ assistant: agent heard: hello
 The echo model does not display instructions directly in this verified version. The tests use a recording model to prove instructions are passed to the model context. With OpenAI, the instructions are included in the `instructions` field:
 
 ```bash
-OPENAI_API_KEY=... npm run dev -- --openai "summarize the project rules"
+OPENAI_API_KEY=... bun run dev -- --openai "summarize the project rules"
 ```
 
 Run with a session:
 
 ```bash
-npm run dev -- --session lesson-9 "hello"
+bun run dev -- --session lesson-9 "hello"
 ```
 
 Inspect the JSONL:
@@ -647,7 +647,7 @@ The session stores user, assistant, and tool messages. It does not store `AGENTS
 Try the manual tool path:
 
 ```bash
-npm run dev -- --tool read_file AGENTS.md
+bun run dev -- --tool read_file AGENTS.md
 ```
 
 Manual tool mode can read the file because `read_file` is a tool, but it skips project instruction loading because no model call happens.
@@ -657,8 +657,8 @@ Manual tool mode can read the file because `read_file` is a tool, but it skips p
 The chapter implementation was checked in a scratch package:
 
 ```text
-npm test: passed, 36 tests
-npm run build -- --noEmit --pretty false: passed
+bun test: passed, 36 tests
+bun run build: passed
 CLI smoke: passed
 ```
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { respondToPrompt } from "./index";
+import { renderTranscript, runTurn } from "./index";
 
 const prompt = process.argv.slice(2).join(" ");
-const response = respondToPrompt(prompt);
+const conversation = runTurn([], prompt);
 
-console.log(response);
+console.log(renderTranscript(conversation));

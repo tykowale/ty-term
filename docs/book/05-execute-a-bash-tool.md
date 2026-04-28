@@ -16,7 +16,7 @@ That is enough structure to add the first real external action.
 This chapter adds a `bash` tool, but it is still manually invoked:
 
 ```bash
-npm run dev -- --tool bash "pwd"
+bun run dev -- --tool bash "pwd"
 ```
 
 The model does not choose commands yet. Running shell commands is powerful and risky, so this chapter keeps the command path explicit and inspectable.
@@ -36,7 +36,7 @@ It runs a shell command with Node built-ins, captures `stdout`, `stderr`, and th
 By the end of the chapter, the harness can run:
 
 ```bash
-npm run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
+bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
 ```
 
 and print a structured tool result.
@@ -289,7 +289,7 @@ import {
   executeTool,
   renderTranscript,
   runTurn,
-} from "./index.js";
+} from "./index";
 
 interface ParsedArgs {
   useOpenAI: boolean;
@@ -349,7 +349,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: npm run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -382,7 +382,7 @@ main().catch((error: unknown) => {
 ## `tests/agent.test.ts`
 
 ```ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   createBashTool,
   createCurrentDirectoryTool,
@@ -394,7 +394,7 @@ import {
   renderTranscript,
   runTurn,
   type Conversation,
-} from "../src/index.js";
+} from "../src/index";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
@@ -497,19 +497,19 @@ describe("bash command execution", () => {
 Build:
 
 ```bash
-npm run build
+bun run build
 ```
 
 Run tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run the normal prompt path:
 
 ```bash
-npm run dev -- "hello bash"
+bun run dev -- "hello bash"
 ```
 
 Expected output:
@@ -522,7 +522,7 @@ assistant: agent heard: hello bash
 Run the new bash tool:
 
 ```bash
-npm run dev -- --tool bash "pwd"
+bun run dev -- --tool bash "pwd"
 ```
 
 Expected shape:
@@ -538,7 +538,7 @@ stderr:
 Run a deterministic Node command:
 
 ```bash
-npm run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
+bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
 ```
 
 Expected output:
@@ -554,7 +554,7 @@ stderr:
 Run a command that fails:
 
 ```bash
-npm run dev -- --tool bash "node -e \"process.stderr.write('bad'); process.exit(7)\""
+bun run dev -- --tool bash "node -e \"process.stderr.write('bad'); process.exit(7)\""
 ```
 
 Expected shape:
@@ -644,13 +644,13 @@ The CLI also learns one new parsing rule: after `--tool <name>`, the remaining a
 That means this works:
 
 ```bash
-npm run dev -- --tool bash "pwd"
+bun run dev -- --tool bash "pwd"
 ```
 
 and this still works:
 
 ```bash
-npm run dev -- "hello"
+bun run dev -- "hello"
 ```
 
 ## Reference Note

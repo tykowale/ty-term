@@ -192,7 +192,7 @@ import {
   executeTool,
   renderTranscript,
   runTurn,
-} from "./index.js";
+} from "./index";
 
 interface ParsedArgs {
   useOpenAI: boolean;
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: npm run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -270,7 +270,7 @@ Tool mode is a separate CLI path. It does not replace the normal prompt path.
 ## `tests/agent.test.ts`
 
 ```ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   createCurrentDirectoryTool,
   createEchoModelClient,
@@ -280,7 +280,7 @@ import {
   renderTranscript,
   runTurn,
   type Conversation,
-} from "../src/index.js";
+} from "../src/index";
 
 describe("agent turn", () => {
   it("keeps the chapter 3 prompt contract stable", async () => {
@@ -336,19 +336,19 @@ The first test is a smoke test for output drift. Future chapters should not acci
 Build:
 
 ```bash
-npm run build
+bun run build
 ```
 
 Run tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run a normal prompt:
 
 ```bash
-npm run dev -- "hello tools"
+bun run dev -- "hello tools"
 ```
 
 Expected output:
@@ -361,7 +361,7 @@ assistant: agent heard: hello tools
 Now inspect the toy tool:
 
 ```bash
-npm run dev -- --tool cwd
+bun run dev -- --tool cwd
 ```
 
 Expected shape:
@@ -370,7 +370,7 @@ Expected shape:
 tool cwd: /path/to/ty-term
 ```
 
-The exact path depends on where you run the npm script from. In the normal book flow, run commands from `ty-term`, so the process working directory is the package root.
+The exact path depends on where you run the package script from. In the normal book flow, run commands from `ty-term`, so the process working directory is the package root.
 
 ## How It Works
 
@@ -458,7 +458,7 @@ The likely next slice:
 - keep the CLI oracle inspectable, for example:
 
 ```bash
-npm run dev -- --tool bash "pwd"
+bun run dev -- --tool bash "pwd"
 ```
 
 Chapter 5 should still avoid a full autonomous loop. The next lesson is command execution as a boundary, not model-driven tool use yet.

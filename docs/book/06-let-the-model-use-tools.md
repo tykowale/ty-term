@@ -10,7 +10,7 @@ Chapter 5 gave the harness two ways to run tools:
 Both tools are still outside the model loop. The human has to type:
 
 ```bash
-npm run dev -- --tool cwd
+bun run dev -- --tool cwd
 ```
 
 This chapter lets the model request one safe tool from inside a normal turn.
@@ -34,7 +34,7 @@ flowchart LR
 By the end, this command:
 
 ```bash
-npm run dev -- "use the cwd tool"
+bun run dev -- "use the cwd tool"
 ```
 
 prints a transcript like:
@@ -474,7 +474,7 @@ import {
   executeTool,
   renderTranscript,
   runTurnWithTools,
-} from "./index.js";
+} from "./index";
 
 interface ParsedArgs {
   useOpenAI: boolean;
@@ -528,7 +528,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: npm run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -571,7 +571,7 @@ That split is the lesson. The registry is not just a lookup table. It is the cap
 Replace the file with this version:
 
 ```ts
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   type Conversation,
   createBashTool,
@@ -586,7 +586,7 @@ import {
   renderTranscript,
   runTurn,
   runTurnWithTools,
-} from "../src/index.js";
+} from "../src/index";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
@@ -764,14 +764,14 @@ describe("bash command execution", () => {
 Run the checks:
 
 ```bash
-npm run build
-npm test
+bun run build
+bun test
 ```
 
 Then run the normal path:
 
 ```bash
-npm run dev -- "hello"
+bun run dev -- "hello"
 ```
 
 Expected shape:
@@ -784,7 +784,7 @@ assistant: agent heard: hello
 Now run the tool path:
 
 ```bash
-npm run dev -- "use the cwd tool"
+bun run dev -- "use the cwd tool"
 ```
 
 Expected shape:

@@ -13,8 +13,8 @@ model turn -> allowlisted tool registry
 But the CLI still behaves like a one-shot command. Every prompt starts a new process:
 
 ```bash
-npm run dev -- "hello"
-npm run dev -- --session lesson-9 "what did I say?"
+bun run dev -- "hello"
+bun run dev -- --session lesson-9 "what did I say?"
 ```
 
 That is useful for tests, but a terminal harness should stay alive while the human keeps asking questions.
@@ -22,13 +22,13 @@ That is useful for tests, but a terminal harness should stay alive while the hum
 This chapter adds the smallest interactive mode:
 
 ```bash
-npm run dev -- --interactive
+bun run dev -- --interactive
 ```
 
 or:
 
 ```bash
-npm run dev -- -i
+bun run dev -- -i
 ```
 
 Inside that process, `ty-term` keeps an in-memory conversation across prompts. If `--session <id>` is supplied, it also appends each completed turn to JSONL.
@@ -103,7 +103,7 @@ import {
   runSessionTurn,
   runTurnWithTools,
   validateSessionId,
-} from "./index.js";
+} from "./index";
 ```
 
 Extend parsed args:
@@ -291,7 +291,7 @@ async function main(): Promise<void> {
 
   if (!parsed.interactive && parsed.prompt.length === 0) {
     console.error(
-      'Usage: npm run dev -- [--session id] [--openai] [--interactive] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--openai] [--interactive] "your prompt"',
     );
     process.exit(1);
   }
@@ -403,7 +403,7 @@ interactive model mode   -> cwd, read_file
 Manual `bash` remains available for direct inspection:
 
 ```bash
-npm run dev -- --tool bash "pwd"
+bun run dev -- --tool bash "pwd"
 ```
 
 Model-driven `bash` remains unavailable. Interactive mode must not widen the model’s authority just because the process stays alive longer.
@@ -419,7 +419,7 @@ import { Readable, Writable } from "node:stream";
 Import the CLI helpers:
 
 ```ts
-import { parseArgs, runInteractiveLoop } from "../src/cli.js";
+import { parseArgs, runInteractiveLoop } from "../src/cli";
 ```
 
 Add an output recorder:
@@ -603,19 +603,19 @@ describe("chapter 10 interactive loop", () => {
 Run the tests:
 
 ```bash
-npm test
+bun test
 ```
 
 Run TypeScript:
 
 ```bash
-npm run build -- --noEmit --pretty false
+bun run build
 ```
 
 Start interactive mode with the echo model:
 
 ```bash
-npm run dev -- --interactive
+bun run dev -- --interactive
 ```
 
 Expected shape:
@@ -630,7 +630,7 @@ assistant: agent heard: hello
 Try the short flag:
 
 ```bash
-npm run dev -- -i
+bun run dev -- -i
 ```
 
 Try an allowlisted tool:
@@ -655,7 +655,7 @@ Ctrl-D exits by closing stdin. Blank lines simply reprompt in the verified imple
 Run interactive mode with a durable session:
 
 ```bash
-npm run dev -- --interactive --session lesson-10
+bun run dev -- --interactive --session lesson-10
 ```
 
 Then inspect:
@@ -667,13 +667,13 @@ cat .ty-term/sessions/lesson-10.jsonl
 Run with OpenAI:
 
 ```bash
-OPENAI_API_KEY=... npm run dev -- --interactive --openai
+OPENAI_API_KEY=... bun run dev -- --interactive --openai
 ```
 
 Run a quick piped smoke test:
 
 ```bash
-printf "hello\n/exit\n" | npm run dev -- --interactive --session smoke
+printf "hello\n/exit\n" | bun run dev -- --interactive --session smoke
 ```
 
 ## Verification
@@ -681,8 +681,8 @@ printf "hello\n/exit\n" | npm run dev -- --interactive --session smoke
 The chapter implementation was checked in a scratch package:
 
 ```text
-npm test: passed, 7 focused tests
-npm run build -- --noEmit --pretty false: passed
+bun test: passed, 7 focused tests
+bun run build: passed
 CLI smoke: passed
 ```
 

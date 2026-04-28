@@ -453,7 +453,7 @@ export function resolveProjectRoot(projectRoot?: string): string {
 }
 ```
 
-When you run an npm script from `ty-term`, the script runs from the package root:
+When you run a package script from `ty-term`, the script runs from the package root:
 
 ```text
 ty-term
@@ -465,7 +465,7 @@ That is also the project root for this book:
 ty-term
 ```
 
-`npm` sets `INIT_CWD` to the directory where the user launched the command. Using `INIT_CWD ?? process.cwd()` makes the tool read from the project root in normal use while staying easy to override in tests.
+The package manager sets `INIT_CWD` to the directory where the user launched the command. Using `INIT_CWD ?? process.cwd()` makes the tool read from the project root in normal use while staying easy to override in tests.
 
 ## The Path Boundary
 
@@ -520,7 +520,7 @@ import {
   renderTranscript,
   resolveProjectRoot,
   runTurnWithTools,
-} from "./index.js";
+} from "./index";
 
 interface ParsedArgs {
   useOpenAI: boolean;
@@ -576,7 +576,7 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: npm run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--openai] "your prompt"');
     process.exit(1);
   }
 
@@ -641,7 +641,7 @@ Replace the file with this version:
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import {
   type Conversation,
   createBashTool,
@@ -657,7 +657,7 @@ import {
   renderTranscript,
   runTurn,
   runTurnWithTools,
-} from "../src/index.js";
+} from "../src/index";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
@@ -934,14 +934,14 @@ describe("bash command execution", () => {
 From the `ty-term` directory:
 
 ```bash
-npm run build
-npm test
+bun run build
+bun test
 ```
 
 Run the model-driven read path:
 
 ```bash
-npm run dev -- "read file package.json"
+bun run dev -- "read file package.json"
 ```
 
 Expected shape:
@@ -956,7 +956,7 @@ assistant: saw tool read_file: {"name":"ty-term", ...}
 Run the manual read path:
 
 ```bash
-npm run dev -- --tool read_file package.json
+bun run dev -- --tool read_file package.json
 ```
 
 Expected shape:
@@ -969,7 +969,7 @@ tool read_file:
 Try a traversal:
 
 ```bash
-npm run dev -- --tool read_file ../package.json
+bun run dev -- --tool read_file ../package.json
 ```
 
 Expected error:
@@ -983,8 +983,8 @@ read_file path must stay inside the project root.
 The chapter implementation was checked in a scratch `ty-term` package:
 
 ```text
-npm run build: passed
-npm test: passed
+bun run build: passed
+bun test: passed
 24 tests passed
 ```
 

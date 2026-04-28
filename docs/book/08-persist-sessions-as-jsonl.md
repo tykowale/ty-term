@@ -294,7 +294,7 @@ import {
   runSessionTurn,
   runTurnWithTools,
   validateSessionId,
-} from "./index.js";
+} from "./index";
 ```
 
 Add `sessionId` to `ParsedArgs`:
@@ -387,7 +387,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: npm run dev -- [--session id] [--openai] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
     );
     process.exit(1);
   }
@@ -469,7 +469,7 @@ import {
   runTurn,
   runTurnWithTools,
   validateSessionId,
-} from "../src/index.js";
+} from "../src/index";
 ```
 
 Add this test group:
@@ -593,14 +593,14 @@ That is still one physical line in the file.
 Run checks:
 
 ```bash
-npm test
-npm run build -- --noEmit --pretty false
+bun test
+bun run build
 ```
 
 Start a named session:
 
 ```bash
-npm run dev -- --session lesson-8 "hello"
+bun run dev -- --session lesson-8 "hello"
 ```
 
 Expected shape:
@@ -613,7 +613,7 @@ assistant: agent heard: hello
 Resume the same session:
 
 ```bash
-npm run dev -- --session lesson-8 "read file package.json"
+bun run dev -- --session lesson-8 "read file package.json"
 ```
 
 Expected shape:
@@ -638,7 +638,7 @@ It should contain one JSON object per message. After the two commands above, the
 Try the safety boundary:
 
 ```bash
-npm run dev -- --session ../bad "hello"
+bun run dev -- --session ../bad "hello"
 ```
 
 Expected error:
@@ -650,7 +650,7 @@ Session id may contain only letters, numbers, dash, and underscore.
 This should also fail because the flag has no id:
 
 ```bash
-npm run dev -- --session --openai "hello"
+bun run dev -- --session --openai "hello"
 ```
 
 Expected error:
@@ -664,8 +664,8 @@ Expected error:
 The chapter implementation was checked in a scratch package:
 
 ```text
-npm test: passed, 23 tests
-npm run build -- --noEmit --pretty false: passed
+bun test: passed, 23 tests
+bun run build: passed
 CLI smoke: passed
 ```
 
