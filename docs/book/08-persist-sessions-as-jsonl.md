@@ -1,20 +1,38 @@
 # Chapter 8: Persist Sessions as JSONL
 
-## Where We Are
-
-Chapter 7 gave the harness a useful read-only project capability. A normal prompt can now flow through:
+Chapter 7 gave the harness a useful read-only project capability. A prompt can
+now flow through the whole model-tool loop:
 
 ```text
-user -> assistant -> optional tool -> assistant
+user: read file package.json
+assistant: TOOL read_file: package.json
+tool read_file: {"name":"ty-term", ...}
+assistant: saw tool read_file: {"name":"ty-term", ...}
 ```
 
-But every CLI run still starts from an empty array:
+The architecture at the end of Chapter 7 is intentionally split:
+
+```text
+Conversation stores and renders messages.
+AgentMessageFactory creates user, assistant, and tool messages.
+ToolRequestParser owns the text tool protocol.
+ToolRegistry owns lookup and dispatch.
+ReadFileTool owns project-root path safety.
+AgentLoop orchestrates one turn.
+cli.ts composes dependencies and prints output.
+```
+
+But every CLI run still starts with an empty `Conversation`:
 
 ```ts
-const conversation: Conversation = [];
+const conversation = new Conversation();
 ```
 
-That means the process forgets everything when it exits. A terminal coding harness needs memory across invocations, so this chapter adds the smallest durable session layer:
+That is fine for proving the tool loop. It is not enough for a terminal coding
+harness. If the process forgets everything when it exits, the next command has
+no history to send back to the model.
+
+This chapter adds durable memory with an append-only JSONL session file:
 
 ```text
 .ty-term/
@@ -22,72 +40,282 @@ That means the process forgets everything when it exits. A terminal coding harne
     lesson-8.jsonl
 ```
 
-Each message is one JSON object on one line:
+Each line is one plain message record:
 
 ```jsonl
 {"role":"user","content":"hello"}
 {"role":"assistant","content":"agent heard: hello"}
 ```
 
-## Learning Objective
+The new boundary is not a pair of `loadSession()` and `saveSession()` helpers in
+`src/index.ts`. Persistence deserves an owner:
 
-Learn an append-only session log:
+```text
+SessionStore describes the storage contract.
+JsonlSessionStore implements that contract on disk.
+```
+
+## The Serialization Boundary
+
+The code now has classes with behavior:
+
+```text
+Conversation can append and render messages.
+AgentLoop can run one turn.
+ToolRegistry can execute tools.
+JsonlSessionStore can persist messages.
+```
+
+But JSON cannot store class behavior. JSONL stores data, not objects.
+
+So the boundary is:
+
+```text
+In memory: Conversation class
+On disk: plain AgentMessage records
+```
+
+That keeps persistence boring. The session file does not know how to render a
+transcript, call a model, execute a tool, or run the agent loop. It only records
+the messages needed to rebuild a `Conversation`.
+
+The invariant for this chapter is:
+
+```text
+Load previous messages -> hydrate Conversation -> run one turn -> append only the new messages
+```
+
+In flow form:
 
 ```mermaid
 flowchart LR
   CLI[CLI starts] --> Args[Parse --session id]
-  Args --> Load[Load session JSONL]
-  Load --> Turn[Run one agent turn]
-  Turn --> Slice[Slice new messages]
-  Slice --> Append[Append JSONL]
-  Append --> Render[Render transcript]
+  Args --> Load[JsonlSessionStore.load]
+  Load --> Conversation[Conversation.fromMessages]
+  Conversation --> Turn[AgentLoop.runTurn]
+  Turn --> Slice[conversation.messagesSince]
+  Slice --> Append[JsonlSessionStore.append]
+  Append --> Render[conversation.renderTranscript]
 ```
 
-The invariant is:
+The storage layer owns loading and appending. `AgentLoop` still owns exactly one
+agent turn.
 
-> Load the previous conversation from disk, run one turn, then append only the messages created by that turn.
+## The File Layout
 
-JSONL keeps this visible. You can inspect the session with `cat`, and appending does not require rewriting a full JSON array.
+Add a session folder and evolve `Conversation` slightly:
 
-## Build The Slice
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    OpenAIModelClient.ts
+  session/
+    JsonlSessionStore.ts
+    SessionStore.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    ReadFileTool.ts
+    Tool.ts
+    ToolRegistry.ts
+    ToolRequestParser.ts
+  cli.ts
+  index.ts
+tests/
+  session-store.test.ts
+  session-resume.test.ts
+```
 
-Change three files:
+`src/index.ts` remains a barrel file. It exports the new classes, but it does
+not contain session behavior.
 
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
+## Conversation Can Be Rebuilt
 
-No new dependencies are needed. This chapter uses Node’s standard library only.
+At the end of Chapter 7, `Conversation` already owns message storage and
+transcript rendering. Persistence needs two more safe access points:
 
-## `src/index.ts`
+- Build a conversation from previously stored messages.
+- Ask which messages were added after a known point.
 
-Add `appendFile` and `mkdir` to the filesystem import:
+Update `src/agent/Conversation.ts`:
+
+```ts
+import type { AgentMessage } from "./AgentMessage";
+
+export class Conversation {
+  private readonly messages: AgentMessage[];
+
+  constructor(messages: AgentMessage[] = []) {
+    this.messages = [...messages];
+  }
+
+  static fromMessages(messages: AgentMessage[]): Conversation {
+    return new Conversation(messages);
+  }
+
+  appendMessages(...messages: AgentMessage[]): void {
+    this.messages.push(...messages);
+  }
+
+  get length(): number {
+    return this.messages.length;
+  }
+
+  toMessages(): AgentMessage[] {
+    return [...this.messages];
+  }
+
+  messagesSince(startIndex: number): AgentMessage[] {
+    return this.messages.slice(startIndex);
+  }
+
+  renderTranscript(): string {
+    return this.messages
+      .map((message) => {
+        if (message.role === "tool") {
+          return `tool ${message.name}: ${message.content}`;
+        }
+
+        return `${message.role}: ${message.content}`;
+      })
+      .join("\n");
+  }
+}
+```
+
+The constructor copies the array it receives:
+
+```ts
+this.messages = [...messages];
+```
+
+That matters because callers should not be able to mutate a conversation by
+holding onto the original array. The same rule appears in `toMessages()` and
+`messagesSince()`. Both return copies.
+
+`Conversation.fromMessages()` is deliberately small:
+
+```ts
+static fromMessages(messages: AgentMessage[]): Conversation {
+  return new Conversation(messages);
+}
+```
+
+The factory method is not doing magic yet. It names the hydration operation.
+That name becomes useful at the session boundary:
+
+```ts
+const conversation = Conversation.fromMessages(
+  await sessionStore.load(sessionId),
+);
+```
+
+The session store loads plain records. `Conversation` turns those records back
+into the object that owns behavior.
+
+## The SessionStore Interface
+
+Create `src/session/SessionStore.ts`:
+
+```ts
+import type { AgentMessage } from "../agent/AgentMessage";
+
+export interface SessionStore {
+  load(sessionId: string): Promise<AgentMessage[]>;
+  append(sessionId: string, messages: AgentMessage[]): Promise<void>;
+  getSessionFilePath(sessionId: string): string;
+}
+```
+
+The interface talks in `AgentMessage[]`, not `Conversation`.
+
+That is intentional. The store owns serialization. It does not own conversation
+behavior.
+
+If `SessionStore.load()` returned a `Conversation`, storage would begin deciding
+which domain object to construct. That is tempting, but it couples disk I/O to
+the agent domain. Keeping the interface in plain records makes the boundary
+clean:
+
+```text
+JsonlSessionStore -> AgentMessage[]
+Conversation.fromMessages -> Conversation
+```
+
+## The JsonlSessionStore
+
+Create `src/session/JsonlSessionStore.ts`:
 
 ```ts
 import { appendFile, mkdir, readFile } from "node:fs/promises";
-```
+import path from "node:path";
+import type { AgentMessage } from "../agent/AgentMessage";
+import { resolveProjectRoot } from "../tools/ReadFileTool";
+import type { SessionStore } from "./SessionStore";
 
-Add these session types near the other option interfaces:
+export class JsonlSessionStore implements SessionStore {
+  private readonly sessionsDirectory: string;
 
-```ts
-export interface SessionTurnOptions {
-  projectRoot?: string;
-  sessionId: string;
-  prompt: string;
-  modelClient: ModelClient;
-  toolRegistry: ToolRegistry;
+  constructor(projectRoot = resolveProjectRoot()) {
+    this.sessionsDirectory = path.join(
+      resolveProjectRoot(projectRoot),
+      ".ty-term",
+      "sessions",
+    );
+  }
+
+  getSessionFilePath(sessionId: string): string {
+    return path.join(
+      this.sessionsDirectory,
+      `${validateSessionId(sessionId)}.jsonl`,
+    );
+  }
+
+  async load(sessionId: string): Promise<AgentMessage[]> {
+    const sessionFilePath = this.getSessionFilePath(sessionId);
+    let contents: string;
+
+    try {
+      contents = await readFile(sessionFilePath, "utf8");
+    } catch (error: unknown) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return [];
+      }
+
+      throw error;
+    }
+
+    return contents
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map(parseSessionLine);
+  }
+
+  async append(sessionId: string, messages: AgentMessage[]): Promise<void> {
+    validateSessionId(sessionId);
+
+    if (messages.length === 0) {
+      return;
+    }
+
+    const sessionFilePath = this.getSessionFilePath(sessionId);
+    await mkdir(path.dirname(sessionFilePath), { recursive: true });
+
+    const lines = messages
+      .map((message) => `${JSON.stringify(message)}\n`)
+      .join("");
+
+    await appendFile(sessionFilePath, lines, "utf8");
+  }
 }
 
-export interface SessionTurnResult {
-  previousConversation: Conversation;
-  nextConversation: Conversation;
-  appendedMessages: Conversation;
-}
-```
-
-Then add the session helpers after `executeTool`:
-
-```ts
 export function validateSessionId(sessionId: string): string {
   if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) {
     throw new Error(
@@ -96,93 +324,6 @@ export function validateSessionId(sessionId: string): string {
   }
 
   return sessionId;
-}
-
-export function getSessionFilePath(
-  projectRoot: string,
-  sessionId: string,
-): string {
-  const safeSessionId = validateSessionId(sessionId);
-
-  return path.join(
-    resolveProjectRoot(projectRoot),
-    ".ty-term",
-    "sessions",
-    `${safeSessionId}.jsonl`,
-  );
-}
-
-export async function loadSessionMessages(
-  projectRoot: string,
-  sessionId: string,
-): Promise<Conversation> {
-  const sessionFilePath = getSessionFilePath(projectRoot, sessionId);
-  let contents: string;
-
-  try {
-    contents = await readFile(sessionFilePath, "utf8");
-  } catch (error: unknown) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return [];
-    }
-
-    throw error;
-  }
-
-  return contents
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .map(parseSessionLine);
-}
-
-export async function appendSessionMessages(
-  projectRoot: string,
-  sessionId: string,
-  messages: Conversation,
-): Promise<void> {
-  if (messages.length === 0) {
-    validateSessionId(sessionId);
-    return;
-  }
-
-  const sessionFilePath = getSessionFilePath(projectRoot, sessionId);
-  await mkdir(path.dirname(sessionFilePath), { recursive: true });
-
-  const lines = messages
-    .map((message) => `${JSON.stringify(message)}\n`)
-    .join("");
-
-  await appendFile(sessionFilePath, lines, "utf8");
-}
-
-export async function runSessionTurn(
-  options: SessionTurnOptions,
-): Promise<SessionTurnResult> {
-  const projectRoot = resolveProjectRoot(options.projectRoot);
-  const previousConversation = await loadSessionMessages(
-    projectRoot,
-    options.sessionId,
-  );
-  const nextConversation = await runTurnWithTools(
-    previousConversation,
-    options.prompt,
-    options.modelClient,
-    options.toolRegistry,
-  );
-  const appendedMessages = nextConversation.slice(previousConversation.length);
-
-  await appendSessionMessages(projectRoot, options.sessionId, appendedMessages);
-
-  return {
-    previousConversation,
-    nextConversation,
-    appendedMessages,
-  };
 }
 
 function parseSessionLine(line: string): AgentMessage {
@@ -211,11 +352,15 @@ function isAgentMessage(value: unknown): value is AgentMessage {
 
   return validRole && validContent && validName;
 }
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
 ```
 
-## The Session Boundary
+There are three decisions in this class.
 
-The session id becomes part of a filename, so it must not be a path:
+First, the session id is not a path:
 
 ```ts
 export function validateSessionId(sessionId: string): string {
@@ -229,14 +374,14 @@ export function validateSessionId(sessionId: string): string {
 }
 ```
 
-This accepts:
+This accepts names like:
 
 ```text
 lesson-8
 abc-123_DEF
 ```
 
-It rejects:
+It rejects names like:
 
 ```text
 ../escape
@@ -245,73 +390,122 @@ a.b
 has space
 ```
 
-The conservative rule is intentional. A session id is a name, not a path.
+The conservative rule is the point. A session id is a name inside
+`.ty-term/sessions/`, not a filesystem path.
 
-## The Append Trick
-
-The chapter’s central line is:
-
-```ts
-const appendedMessages = nextConversation.slice(previousConversation.length);
-```
-
-The agent loop still receives a normal `Conversation`. Persistence does not leak into the loop. After the turn finishes, the storage layer appends only the new messages.
-
-That means this existing history:
+Second, missing sessions load as empty history:
 
 ```ts
-[
-  { role: "user", content: "earlier" },
-  { role: "assistant", content: "agent heard: earlier" },
-];
-```
-
-followed by a new `hello` turn appends only:
-
-```ts
-[
-  { role: "user", content: "hello" },
-  { role: "assistant", content: "agent heard: hello" },
-];
-```
-
-## `src/cli.ts`
-
-Update the imports:
-
-```ts
-import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createReadFileTool,
-  createToolRegistry,
-  executeTool,
-  renderTranscript,
-  resolveProjectRoot,
-  runSessionTurn,
-  runTurnWithTools,
-  validateSessionId,
-} from "./index";
-```
-
-Add `sessionId` to `ParsedArgs`:
-
-```ts
-interface ParsedArgs {
-  useOpenAI: boolean;
-  sessionId?: string;
-  toolName?: string;
-  toolInput?: string;
-  prompt: string;
+if (isNodeError(error) && error.code === "ENOENT") {
+  return [];
 }
 ```
 
-Update `parseArgs` to recognize `--session`:
+That lets the CLI use the same flow for a new session and an existing session.
+
+Third, `append()` writes only the records it receives:
 
 ```ts
+const lines = messages
+  .map((message) => `${JSON.stringify(message)}\n`)
+  .join("");
+```
+
+It does not rewrite the whole session. JSONL is useful here because appending
+new records is the natural operation.
+
+Multiline message content is still safe. `JSON.stringify()` escapes newline
+characters inside the JSON string, so this message:
+
+```ts
+{
+  role: "tool",
+  name: "read_file",
+  content: "line one\nline two\n",
+}
+```
+
+is stored as one physical JSONL line.
+
+## The Barrel File Exports Storage
+
+Update `src/index.ts` so it stays a barrel:
+
+```ts
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export {
+  JsonlSessionStore,
+  validateSessionId,
+} from "./session/JsonlSessionStore";
+export type { SessionStore } from "./session/SessionStore";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export {
+  ReadFileTool,
+  resolveProjectFilePath,
+  resolveProjectRoot,
+} from "./tools/ReadFileTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+```
+
+This file still should not contain `loadSessionMessages()`,
+`appendSessionMessages()`, or `runSessionTurn()`. The first two belong to
+`JsonlSessionStore`. The third is not a domain concept; it is CLI composition.
+
+## The CLI Composes Persistence
+
+The CLI now has one more dependency to compose:
+
+```text
+JsonlSessionStore
+```
+
+It may load a conversation before `AgentLoop.runTurn()` and append messages
+afterward. That is process wiring. It is not agent behavior.
+
+Update `src/cli.ts`:
+
+```ts
+#!/usr/bin/env bun
+
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  JsonlSessionStore,
+  OpenAIModelClient,
+  ReadFileTool,
+  ToolRegistry,
+  resolveProjectRoot,
+  validateSessionId,
+} from "./index";
+
+interface ParsedArgs {
+  readonly useOpenAI: boolean;
+  readonly sessionId?: string;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
+}
+
 function parseArgs(args: string[]): ParsedArgs {
   let useOpenAI = false;
   let sessionId: string | undefined;
@@ -356,11 +550,7 @@ function parseArgs(args: string[]): ParsedArgs {
     prompt: promptParts.join(" "),
   };
 }
-```
 
-Then replace `main` with:
-
-```ts
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const projectRoot = resolveProjectRoot();
@@ -370,13 +560,13 @@ async function main(): Promise<void> {
   }
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: projectRoot }),
-      createBashTool({ cwd: projectRoot }),
-      createReadFileTool({ projectRoot }),
+    const manualToolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(projectRoot),
+      new BashTool({ cwd: projectRoot }),
+      new ReadFileTool(projectRoot),
     ]);
-    const result = await executeTool(
-      registry,
+
+    const result = await manualToolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -389,6 +579,9 @@ async function main(): Promise<void> {
     console.error(
       'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
     );
+    console.error("       bun run dev -- --tool cwd");
+    console.error('       bun run dev -- --tool bash "pwd"');
+    console.error("       bun run dev -- --tool read_file package.json");
     process.exit(1);
   }
 
@@ -397,85 +590,103 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const modelToolRegistry = createToolRegistry([
-    createCurrentDirectoryTool({ cwd: projectRoot }),
-    createReadFileTool({ projectRoot }),
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const modelToolRegistry = new ToolRegistry([
+    new CurrentDirectoryTool(projectRoot),
+    new ReadFileTool(projectRoot),
   ]);
-
-  if (parsed.sessionId) {
-    const result = await runSessionTurn({
-      projectRoot,
-      sessionId: parsed.sessionId,
-      prompt: parsed.prompt,
-      modelClient,
-      toolRegistry: modelToolRegistry,
-    });
-
-    process.stdout.write(`${renderTranscript(result.nextConversation)}\n`);
-    return;
-  }
-
-  const conversation: Conversation = [];
-  const nextConversation = await runTurnWithTools(
-    conversation,
-    parsed.prompt,
+  const agentLoop = new AgentLoop(
+    messageFactory,
     modelClient,
     modelToolRegistry,
   );
+  const sessionStore = new JsonlSessionStore(projectRoot);
+  const conversation = parsed.sessionId
+    ? Conversation.fromMessages(await sessionStore.load(parsed.sessionId))
+    : new Conversation();
+  const startingLength = conversation.length;
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  await agentLoop.runTurn(conversation, parsed.prompt);
+
+  if (parsed.sessionId) {
+    await sessionStore.append(
+      parsed.sessionId,
+      conversation.messagesSince(startingLength),
+    );
+  }
+
+  process.stdout.write(`${conversation.renderTranscript()}\n`);
+}
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${message}\n`);
+  process.exitCode = 1;
+});
+```
+
+The important sequence is small:
+
+```ts
+const conversation = parsed.sessionId
+  ? Conversation.fromMessages(await sessionStore.load(parsed.sessionId))
+  : new Conversation();
+const startingLength = conversation.length;
+
+await agentLoop.runTurn(conversation, parsed.prompt);
+
+if (parsed.sessionId) {
+  await sessionStore.append(
+    parsed.sessionId,
+    conversation.messagesSince(startingLength),
+  );
 }
 ```
 
-The no-session path still uses:
+`AgentLoop` does not know whether this conversation came from disk or from a new
+constructor call. It receives a `Conversation` and runs one turn.
 
-```ts
-const conversation: Conversation = [];
-```
+The CLI does know about process concerns:
 
-Do not load a session with an empty id. Empty ids are invalid.
+- `process.argv`
+- `process.env.OPENAI_API_KEY`
+- project root selection
+- dependency construction
+- stdout and stderr
+- whether a session flag was provided
 
-## `tests/agent.test.ts`
+That is enough responsibility. Do not move JSON parsing, transcript rendering,
+tool execution, or model orchestration into the CLI.
 
-Add these imports:
+## Tests For Session Storage
+
+Start with the persistence boundary itself.
+
+Create `tests/session-store.test.ts`:
 
 ```ts
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-```
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "bun:test";
+import { JsonlSessionStore, validateSessionId } from "../src/index";
 
-and include the new exports:
+async function withTempProject<T>(
+  callback: (projectRoot: string) => Promise<T>,
+): Promise<T> {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "ty-term-session-"));
 
-```ts
-import {
-  type Conversation,
-  appendSessionMessages,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createReadFileTool,
-  createToolMessage,
-  createToolRegistry,
-  executeCommand,
-  executeTool,
-  getSessionFilePath,
-  getTool,
-  loadSessionMessages,
-  parseToolRequest,
-  renderTranscript,
-  runSessionTurn,
-  runTurn,
-  runTurnWithTools,
-  validateSessionId,
-} from "../src/index";
-```
+  try {
+    return await callback(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+}
 
-Add this test group:
-
-```ts
-describe("session persistence", () => {
+describe("JsonlSessionStore", () => {
   it("accepts conservative session ids", () => {
     expect(validateSessionId("abc-123_DEF")).toBe("abc-123_DEF");
   });
@@ -490,85 +701,55 @@ describe("session persistence", () => {
 
   it("stores sessions under the project root .ty-term directory", async () => {
     await withTempProject(async (projectRoot) => {
-      expect(getSessionFilePath(projectRoot, "lesson-8")).toBe(
+      const store = new JsonlSessionStore(projectRoot);
+
+      expect(store.getSessionFilePath("lesson-8")).toBe(
         path.join(projectRoot, ".ty-term", "sessions", "lesson-8.jsonl"),
       );
     });
   });
 
-  it("returns an empty conversation when a session does not exist", async () => {
+  it("returns an empty history when a session does not exist", async () => {
     await withTempProject(async (projectRoot) => {
-      await expect(
-        loadSessionMessages(projectRoot, "missing"),
-      ).resolves.toEqual([]);
+      const store = new JsonlSessionStore(projectRoot);
+
+      await expect(store.load("missing")).resolves.toEqual([]);
     });
   });
 
   it("appends and loads messages as JSONL", async () => {
     await withTempProject(async (projectRoot) => {
-      await appendSessionMessages(projectRoot, "lesson-8", [
+      const store = new JsonlSessionStore(projectRoot);
+
+      await store.append("lesson-8", [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "agent heard: hello" },
+      ]);
+
+      await expect(store.load("lesson-8")).resolves.toEqual([
         { role: "user", content: "hello" },
         { role: "assistant", content: "agent heard: hello" },
       ]);
 
       await expect(
-        loadSessionMessages(projectRoot, "lesson-8"),
-      ).resolves.toEqual([
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "agent heard: hello" },
-      ]);
-
-      await expect(
-        readFile(getSessionFilePath(projectRoot, "lesson-8"), "utf8"),
+        readFile(store.getSessionFilePath("lesson-8"), "utf8"),
       ).resolves.toBe(
         '{"role":"user","content":"hello"}\n{"role":"assistant","content":"agent heard: hello"}\n',
       );
     });
   });
 
-  it("appends only the messages created during the current turn", async () => {
-    await withTempProject(async (projectRoot) => {
-      await appendSessionMessages(projectRoot, "lesson-8", [
-        { role: "user", content: "earlier" },
-        { role: "assistant", content: "agent heard: earlier" },
-      ]);
-
-      const result = await runSessionTurn({
-        projectRoot,
-        sessionId: "lesson-8",
-        prompt: "hello",
-        modelClient: createEchoModelClient(),
-        toolRegistry: createToolRegistry([]),
-      });
-
-      expect(result.previousConversation).toHaveLength(2);
-      expect(result.appendedMessages).toEqual([
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "agent heard: hello" },
-      ]);
-      await expect(
-        loadSessionMessages(projectRoot, "lesson-8"),
-      ).resolves.toEqual([
-        { role: "user", content: "earlier" },
-        { role: "assistant", content: "agent heard: earlier" },
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "agent heard: hello" },
-      ]);
-    });
-  });
-
   it("rejects invalid message records while loading", async () => {
     await withTempProject(async (projectRoot) => {
-      await appendSessionMessages(projectRoot, "broken", [
-        { role: "user", content: "placeholder" },
-      ]);
+      const store = new JsonlSessionStore(projectRoot);
+      await store.append("broken", [{ role: "user", content: "placeholder" }]);
       await writeFile(
-        getSessionFilePath(projectRoot, "broken"),
+        store.getSessionFilePath("broken"),
         '{"role":"user"}\n',
         "utf8",
       );
 
-      await expect(loadSessionMessages(projectRoot, "broken")).rejects.toThrow(
+      await expect(store.load("broken")).rejects.toThrow(
         "Session file contains an invalid message.",
       );
     });
@@ -576,21 +757,120 @@ describe("session persistence", () => {
 });
 ```
 
-One subtle case is multiline content. JSONL still stores it as one record because `JSON.stringify` escapes newline characters inside the JSON string:
+These tests do not instantiate `AgentLoop`. That is the point. They test the
+storage object as a storage object:
 
-```jsonl
-{
-  "role": "tool",
-  "name": "read_file",
-  "content": "line one\nline two\n"
-}
+```text
+session id validation
+path resolution
+missing session loading
+JSONL append
+JSONL hydration
+invalid record rejection
 ```
 
-That is still one physical line in the file.
+## Tests For Resuming A Conversation
+
+The next test proves the composition rule:
+
+```text
+load old messages, run one turn, append only new messages
+```
+
+Create `tests/session-resume.test.ts`:
+
+```ts
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "bun:test";
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  EchoModelClient,
+  JsonlSessionStore,
+  ToolRegistry,
+} from "../src/index";
+
+async function withTempProject<T>(
+  callback: (projectRoot: string) => Promise<T>,
+): Promise<T> {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "ty-term-resume-"));
+
+  try {
+    return await callback(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+}
+
+describe("session resume", () => {
+  it("hydrates a conversation and appends only the current turn", async () => {
+    await withTempProject(async (projectRoot) => {
+      const sessionStore = new JsonlSessionStore(projectRoot);
+      await sessionStore.append("lesson-8", [
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: "agent heard: earlier" },
+      ]);
+
+      const conversation = Conversation.fromMessages(
+        await sessionStore.load("lesson-8"),
+      );
+      const startingLength = conversation.length;
+      const agentLoop = new AgentLoop(
+        new AgentMessageFactory(),
+        new EchoModelClient(),
+        new ToolRegistry([]),
+      );
+
+      await agentLoop.runTurn(conversation, "hello");
+
+      const appendedMessages = conversation.messagesSince(startingLength);
+      await sessionStore.append("lesson-8", appendedMessages);
+
+      expect(appendedMessages).toEqual([
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "agent heard: hello" },
+      ]);
+      await expect(sessionStore.load("lesson-8")).resolves.toEqual([
+        { role: "user", content: "earlier" },
+        { role: "assistant", content: "agent heard: earlier" },
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "agent heard: hello" },
+      ]);
+    });
+  });
+});
+```
+
+This test deliberately performs the same composition the CLI performs. There is
+no `runSessionTurn()` helper to hide the data flow.
+
+The lesson is the data flow:
+
+```ts
+const conversation = Conversation.fromMessages(
+  await sessionStore.load("lesson-8"),
+);
+const startingLength = conversation.length;
+
+await agentLoop.runTurn(conversation, "hello");
+
+await sessionStore.append(
+  "lesson-8",
+  conversation.messagesSince(startingLength),
+);
+```
+
+If this feels a little repetitive between the CLI and the test, that is
+acceptable at this point in the book. A later `InteractiveLoop` can own repeated
+terminal behavior. This chapter should not invent a session god object just to
+remove four lines from the CLI.
 
 ## Run It
 
-Run checks:
+Run the usual checks:
 
 ```bash
 bun test
@@ -627,15 +907,15 @@ tool read_file: {"name":"ty-term", ...}
 assistant: saw tool read_file: {"name":"ty-term", ...}
 ```
 
-Inspect the session file:
+Inspect the file:
 
 ```bash
 cat .ty-term/sessions/lesson-8.jsonl
 ```
 
-It should contain one JSON object per message. After the two commands above, the file has six lines.
+After those two commands, it should contain one JSON object per message.
 
-Try the safety boundary:
+Try the session-id safety boundary:
 
 ```bash
 bun run dev -- --session ../bad "hello"
@@ -659,54 +939,37 @@ Expected error:
 --session requires an id.
 ```
 
-## Verification
-
-The chapter implementation was checked in a scratch package:
-
-```text
-bun test: passed, 23 tests
-bun run build: passed
-CLI smoke: passed
-```
-
-The CLI smoke test confirmed:
-
-- first `--session lesson-8 hello` creates a session
-- second `--session lesson-8 "read file package.json"` loads and appends
-- the session file ends with six JSONL lines
-- `--session ../bad hello` rejects traversal
-- `--session --openai hello` rejects the missing id
-
-## Reference Pointer
-
-In `pi-mono`, compare this chapter with:
-
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-- `pi-mono/packages/coding-agent/src/main.ts`
-- `pi-mono/packages/coding-agent/src/cli/args.ts`
-
-The real project has richer persistence: generated ids, session headers, metadata entries, compaction, branching, migrations, and event streams. This chapter keeps one idea: rebuild conversation state from an append-only message log.
-
 ## What We Simplified
 
 We did not add generated session ids. The reader passes `--session lesson-8`.
 
 We did not add locking. Two processes writing the same session can interleave.
 
-We did not persist partial failed turns. If a tool throws, this chapter exits before appending.
+We did not persist partial failed turns. If a model call or tool throws, this
+chapter exits before appending.
 
-We print the full resumed transcript so the persistence behavior is obvious. A later terminal UI would probably render a scrollback or only the latest turn.
+We print the full resumed transcript so the persistence behavior is visible. A
+later terminal UI would probably render only the latest turn or a scrollback
+window.
+
+We kept session composition in `cli.ts` for now. That is acceptable because
+there is only one process mode. Chapter 10 will introduce `InteractiveLoop`,
+which is a better owner for repeated terminal behavior.
 
 ## Checkpoint
 
 You now have:
 
 - `--session <id>` CLI parsing
+- `SessionStore` as the storage contract
+- `JsonlSessionStore` as the disk implementation
 - project-local session files under `.ty-term/sessions/`
 - JSONL append-only message storage
-- session loading before each run
+- `Conversation.fromMessages()` for hydration
+- safe message access through `toMessages()` and `messagesSince()`
 - saving only messages created by the current run
 - validation that prevents session ids from becoming paths
-- tests around the persistence boundary
+- tests around storage and resume behavior
 
-The harness now has durable memory. Chapter 9 uses that memory alongside project instructions, so the model can read local guidance before it answers.
+The harness now has durable memory. Chapter 9 uses that memory alongside
+project instructions, so the model can read local guidance before it answers.

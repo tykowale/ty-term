@@ -1,208 +1,292 @@
 # Chapter 4: Add a Tool Boundary
 
-## Where We Are
+Chapter 3 gave the harness three important owners:
 
-At the end of Chapter 3, `ty-term` can hold a conversation, render a transcript, and run one model turn through either an echo model or OpenAI. The CLI has two modes:
+- `Conversation` owns ordered message history and transcript rendering.
+- `AgentLoop` owns a model turn.
+- `ModelClient` owns provider interaction.
 
-- default: echo model
-- `--openai`: real model call
-
-What it cannot do yet is describe an action the harness could take outside the model.
-
-That is the next boundary. We are not running shell commands yet. We are only giving the program a typed way to name a tool, register it, look it up, and execute a harmless toy tool.
-
-## Learning Objective
-
-Understand that tools are not magic model behavior. In our harness, a tool is just a typed object with:
-
-- a stable name
-- a human-readable description
-- an async `execute` function
-
-The observable slice is small: `--tool cwd` prints the current directory and exits.
+The CLI could run the deterministic echo path:
 
 ```text
-tool cwd: /some/current/directory
+$ bun run dev -- "hello"
+user: hello
+assistant: agent heard: hello
 ```
 
-Normal prompts still run the model turn exactly like Chapter 3.
+Or it could opt into the real provider with `--openai`.
 
-## Build The Slice
+What the harness still cannot do is describe an action it can take outside the
+model. A coding agent eventually needs to read files, inspect directories, and
+run commands. Those actions should not become random helper functions in
+`src/index.ts`, and they should not become ad hoc branches inside `cli.ts`.
 
-Change three files:
+This chapter adds the first tool boundary.
 
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    OpenAIModelClient.ts
+  tools/
+    Tool.ts
+    ToolRegistry.ts
+    CurrentDirectoryTool.ts
+  cli.ts
+  index.ts
+tests/
+  agent-loop.test.ts
+  tool-registry.test.ts
+```
 
-No new dependencies. No shell execution.
+The visible behavior is deliberately small:
 
-## `src/index.ts`
+```text
+$ bun run dev -- --tool cwd
+tool cwd: /path/to/ty-term
+```
+
+Normal prompts still run through `AgentLoop` exactly like Chapter 3:
+
+```text
+$ bun run dev -- "hello tools"
+user: hello tools
+assistant: agent heard: hello tools
+```
+
+The model does not choose tools yet. The conversation does not contain tool
+calls yet. We are only carving out where tools live before they become powerful.
+
+## The New Ownership Rule
+
+The new object is `ToolRegistry`.
+
+```text
+Tool owns one capability.
+ToolRegistry owns lookup and execution dispatch.
+AgentLoop still owns model-turn orchestration.
+cli.ts only composes objects and selects a top-level command path.
+```
+
+That last point matters. It would be easy to write this chapter as a handful of
+helpers:
 
 ```ts
-import OpenAI from "openai";
+createToolRegistry();
+getTool();
+executeTool();
+createCurrentDirectoryTool();
+```
 
-export type AgentRole = "user" | "assistant";
+Those helpers are short, but they teach the wrong shape. A registry is not just
+a map. It owns invariants:
 
-export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-}
+- tool names must be unique
+- unknown tools should fail consistently
+- callers should not mutate the registered tool set by accident
+- execution should go through one dispatch point
 
-export type Conversation = AgentMessage[];
+When an object owns those rules, future tools can grow without scattering lookup
+logic across the CLI, the agent loop, and tests.
 
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
-}
+## A Tool Is A Named Object
 
-export interface ToolDefinition {
-  name: string;
-  description: string;
+Start with the smallest useful tool interface in `src/tools/Tool.ts`:
+
+```ts
+export interface Tool {
+  readonly name: string;
+  readonly description: string;
+
   execute(input?: string): Promise<string>;
 }
+```
 
-export type ToolRegistry = ReadonlyMap<string, ToolDefinition>;
+This is intentionally plain. A tool has a stable name, a description the harness
+can show to a user or model later, and an async `execute()` method.
 
-export function createUserMessage(content: string): AgentMessage {
-  return { role: "user", content };
+The method is async even though this chapter's first tool is instant. Future
+tools will read files and run processes, so the boundary should already have
+the shape real tools need.
+
+We are not adding schemas, permissions, streaming output, cancellation, or
+structured result objects yet. Those are real concerns, but they would hide the
+first idea:
+
+```text
+a tool is a named async capability behind a typed boundary
+```
+
+## The First Tool
+
+The safest possible tool is one that reports the current working directory.
+
+`src/tools/CurrentDirectoryTool.ts`:
+
+```ts
+import type { Tool } from "./Tool";
+
+export class CurrentDirectoryTool implements Tool {
+  public readonly name = "cwd";
+  public readonly description = "Return the current working directory.";
+
+  constructor(private readonly cwd = process.cwd()) {}
+
+  async execute(): Promise<string> {
+    return this.cwd;
+  }
 }
+```
 
-export function createAssistantMessage(content: string): AgentMessage {
-  return { role: "assistant", content };
-}
+This class is tiny, but it is doing real architectural work.
 
-export function createEchoModelClient(): ModelClient {
-  return {
-    async createResponse(prompt: string): Promise<string> {
-      return `agent heard: ${prompt}`;
-    },
-  };
-}
+`CurrentDirectoryTool` owns the implementation of the `cwd` capability. The
+registry should not know how to compute a current directory. The CLI should not
+know how to compute it either. They only know that there is a tool named `cwd`
+and that executing it returns text.
 
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-): ModelClient {
-  const client = new OpenAI();
+The constructor accepts `cwd` so tests can be deterministic:
 
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const response = await client.responses.create({
-        model,
-        input: [
-          ...conversation.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          { role: "user", content: prompt },
-        ],
-      });
+```ts
+new CurrentDirectoryTool("/learn/harness");
+```
 
-      return response.output_text;
-    },
-  };
-}
+Tests should not depend on the machine's actual working directory when the
+behavior being tested is tool dispatch.
 
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
+## The Registry Owns Tool Dispatch
 
-  return [...conversation, userMessage, assistantMessage];
-}
+Now add `src/tools/ToolRegistry.ts`:
 
-export function renderTranscript(conversation: Conversation): string {
-  return conversation
-    .map((message) => `${message.role}: ${message.content}`)
-    .join("\n");
-}
+```ts
+import type { Tool } from "./Tool";
 
-export function createCurrentDirectoryTool(options?: {
-  cwd?: string;
-}): ToolDefinition {
-  const cwd = options?.cwd ?? process.cwd();
+export class ToolRegistry {
+  private readonly toolsByName = new Map<string, Tool>();
 
-  return {
-    name: "cwd",
-    description: "Return the current working directory.",
-    async execute() {
-      return cwd;
-    },
-  };
-}
+  constructor(tools: readonly Tool[] = []) {
+    for (const tool of tools) {
+      this.register(tool);
+    }
+  }
 
-export function createToolRegistry(
-  tools: readonly ToolDefinition[],
-): ToolRegistry {
-  const registry = new Map<string, ToolDefinition>();
-
-  for (const tool of tools) {
-    if (registry.has(tool.name)) {
+  register(tool: Tool): void {
+    if (this.toolsByName.has(tool.name)) {
       throw new Error(`Duplicate tool name: ${tool.name}`);
     }
 
-    registry.set(tool.name, tool);
+    this.toolsByName.set(tool.name, tool);
   }
 
-  return registry;
-}
-
-export function getTool(
-  registry: ToolRegistry,
-  name: string,
-): ToolDefinition | undefined {
-  return registry.get(name);
-}
-
-export async function executeTool(
-  registry: ToolRegistry,
-  name: string,
-  input?: string,
-): Promise<string> {
-  const tool = getTool(registry, name);
-
-  if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
+  get(name: string): Tool | undefined {
+    return this.toolsByName.get(name);
   }
 
-  return tool.execute(input);
+  list(): Tool[] {
+    return [...this.toolsByName.values()];
+  }
+
+  async execute(name: string, input?: string): Promise<string> {
+    const tool = this.get(name);
+
+    if (!tool) {
+      throw new Error(`Unknown tool: ${name}`);
+    }
+
+    return tool.execute(input);
+  }
 }
 ```
 
-## `src/cli.ts`
+Read that class by its responsibilities:
+
+- `register()` owns duplicate-name validation.
+- `get()` owns lookup.
+- `list()` exposes a safe snapshot of registered tools.
+- `execute()` owns unknown-tool errors and dispatches to the tool object.
+
+The registry does not know what a current directory is. It does not know how to
+run bash. It does not know how to read a file. That is the point of the
+boundary: the registry manages tools, while each tool implements one
+capability.
+
+The registry also does not return its internal `Map`. Returning the map would
+let callers mutate the registered tools from the outside. A chapter this small
+is a good place to teach that habit: expose behavior, not internal storage.
+
+## The Barrel File Stays Boring
+
+`src/index.ts` should export the new objects, not implement them:
 
 ```ts
-#!/usr/bin/env node
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+```
+
+This is the only role `index.ts` gets. It is a public import surface, not a
+place to hide behavior that did not have an obvious home.
+
+## The CLI Proves The Boundary
+
+This chapter does not pass `ToolRegistry` into `AgentLoop` yet.
+
+That may feel surprising. We just added tools, and the loop is the agent
+orchestrator. Shouldn't the loop receive the registry immediately?
+
+Not yet. In this chapter, the model is not choosing tools. There is no tool-call
+syntax, no parser, no tool result message, and no second model call after a tool
+result. If we inject the registry into `AgentLoop` now, the dependency would sit
+there unused or force the loop to learn behavior that belongs in Chapter 6.
+
+So Chapter 4 uses a manual CLI path:
+
+```text
+--tool cwd
+```
+
+That path proves `ToolRegistry` can register, find, and execute a named tool.
+Normal prompts still go through `AgentLoop`.
+
+`src/cli.ts`:
+
+```ts
+#!/usr/bin/env bun
 
 import {
-  type Conversation,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createToolRegistry,
-  executeTool,
-  renderTranscript,
-  runTurn,
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  OpenAIModelClient,
+  ToolRegistry,
 } from "./index";
 
 interface ParsedArgs {
-  useOpenAI: boolean;
-  toolName?: string;
-  prompt: string;
+  readonly useOpenAI: boolean;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
   let useOpenAI = false;
   let toolName: string | undefined;
+  let toolInput: string | undefined;
   const promptParts: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -215,28 +299,34 @@ function parseArgs(args: string[]): ParsedArgs {
 
     if (arg === "--tool") {
       toolName = args[index + 1];
-      index += 1;
+      toolInput = args[index + 2];
+      index += toolInput === undefined ? 1 : 2;
       continue;
     }
 
     promptParts.push(arg);
   }
 
-  return { useOpenAI, toolName, prompt: promptParts.join(" ") };
+  return { useOpenAI, toolName, toolInput, prompt: promptParts.join(" ") };
 }
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([createCurrentDirectoryTool()]);
-    const result = await executeTool(registry, parsed.toolName);
+    const toolRegistry = new ToolRegistry([new CurrentDirectoryTool()]);
+    const result = await toolRegistry.execute(
+      parsed.toolName,
+      parsed.toolInput,
+    );
+
     process.stdout.write(`tool ${parsed.toolName}: ${result}\n`);
     return;
   }
 
   if (parsed.prompt.length === 0) {
     console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error("       bun run dev -- --tool cwd");
     process.exit(1);
   }
 
@@ -245,17 +335,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const conversation: Conversation = [];
-  const nextConversation = await runTurn(
-    conversation,
-    parsed.prompt,
-    modelClient,
-  );
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const agentLoop = new AgentLoop(messageFactory, modelClient);
+  const conversation = new Conversation();
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  await agentLoop.runTurn(conversation, parsed.prompt);
+
+  console.log(conversation.renderTranscript());
 }
 
 main().catch((error: unknown) => {
@@ -265,73 +354,124 @@ main().catch((error: unknown) => {
 });
 ```
 
-Tool mode is a separate CLI path. It does not replace the normal prompt path.
+The CLI still has process-level responsibilities:
 
-## `tests/agent.test.ts`
+- read process arguments
+- choose the top-level mode
+- construct process dependencies
+- print output
+- turn thrown errors into stderr and a non-zero exit
+
+It does not own tool lookup rules. It does not inspect a map. It does not know
+how `cwd` is implemented. It builds a registry and asks the registry to execute
+a named tool.
+
+That is the distinction to preserve as the harness grows:
+
+```text
+cli.ts composes the registry
+ToolRegistry dispatches the tool
+CurrentDirectoryTool implements the behavior
+```
+
+## Tests For The Boundary
+
+Keep the Chapter 3 agent-loop tests. Chapter 4 should not change the prompt
+contract.
+
+Add focused tests for the tool boundary in `tests/tool-registry.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import {
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createToolRegistry,
-  executeTool,
-  getTool,
-  renderTranscript,
-  runTurn,
-  type Conversation,
-} from "../src/index";
+import { CurrentDirectoryTool, ToolRegistry, type Tool } from "../src/index";
 
-describe("agent turn", () => {
-  it("keeps the chapter 3 prompt contract stable", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
-    expect(renderTranscript(conversation)).toBe(
-      "user: hello\nassistant: agent heard: hello",
-    );
-  });
+describe("CurrentDirectoryTool", () => {
+  it("returns the configured current directory", async () => {
+    const tool = new CurrentDirectoryTool("/learn/harness");
 
-  it("does not mutate the previous conversation", async () => {
-    const original: Conversation = [{ role: "user", content: "earlier" }];
-    await runTurn(original, "next", createEchoModelClient());
-    expect(original).toEqual([{ role: "user", content: "earlier" }]);
+    await expect(tool.execute()).resolves.toBe("/learn/harness");
   });
 });
 
-describe("tool registry", () => {
+describe("ToolRegistry", () => {
   it("stores tools by name", () => {
-    const cwdTool = createCurrentDirectoryTool({ cwd: "/learn/harness" });
-    const registry = createToolRegistry([cwdTool]);
-    expect(getTool(registry, "cwd")).toBe(cwdTool);
+    const cwdTool = new CurrentDirectoryTool("/learn/harness");
+    const registry = new ToolRegistry([cwdTool]);
+
+    expect(registry.get("cwd")).toBe(cwdTool);
+  });
+
+  it("lists registered tools without exposing registry storage", () => {
+    const cwdTool = new CurrentDirectoryTool("/learn/harness");
+    const registry = new ToolRegistry([cwdTool]);
+
+    expect(registry.list()).toEqual([cwdTool]);
   });
 
   it("rejects duplicate tool names", () => {
-    expect(() =>
-      createToolRegistry([
-        createCurrentDirectoryTool({ cwd: "/one" }),
-        createCurrentDirectoryTool({ cwd: "/two" }),
-      ]),
+    expect(
+      () =>
+        new ToolRegistry([
+          new CurrentDirectoryTool("/one"),
+          new CurrentDirectoryTool("/two"),
+        ]),
     ).toThrow("Duplicate tool name: cwd");
   });
 
   it("executes a named tool", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
+    const registry = new ToolRegistry([
+      new CurrentDirectoryTool("/learn/harness"),
     ]);
-    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
+
+    await expect(registry.execute("cwd")).resolves.toBe("/learn/harness");
+  });
+
+  it("passes optional input to the selected tool", async () => {
+    class EchoInputTool implements Tool {
+      public readonly name = "echo-input";
+      public readonly description = "Return the provided input.";
+
+      async execute(input?: string): Promise<string> {
+        return input ?? "";
+      }
+    }
+
+    const registry = new ToolRegistry([new EchoInputTool()]);
+
+    await expect(registry.execute("echo-input", "hello")).resolves.toBe(
+      "hello",
+    );
   });
 
   it("reports unknown tools", async () => {
-    const registry = createToolRegistry([]);
-    await expect(executeTool(registry, "missing")).rejects.toThrow(
+    const registry = new ToolRegistry();
+
+    await expect(registry.execute("missing")).rejects.toThrow(
       "Unknown tool: missing",
     );
   });
 });
 ```
 
-The first test is a smoke test for output drift. Future chapters should not accidentally change the prompt contract while adding tool behavior.
+These tests are small, but each one protects an ownership rule:
+
+- `CurrentDirectoryTool` owns the `cwd` behavior.
+- `ToolRegistry` owns name lookup.
+- `ToolRegistry` rejects duplicate names.
+- `ToolRegistry` owns execution dispatch.
+- `ToolRegistry` reports unknown tools consistently.
+- Tool input flows through the registry without the registry understanding it.
+
+The last test is a small preview of Chapter 5. A bash tool will need a command
+string as input, but the registry should not know what that command means.
 
 ## Try It
+
+Install dependencies if needed:
+
+```bash
+bun install
+```
 
 Build:
 
@@ -345,7 +485,7 @@ Run tests:
 bun test
 ```
 
-Run a normal prompt:
+Run the normal prompt path:
 
 ```bash
 bun run dev -- "hello tools"
@@ -358,7 +498,7 @@ user: hello tools
 assistant: agent heard: hello tools
 ```
 
-Now inspect the toy tool:
+Now inspect the tool path:
 
 ```bash
 bun run dev -- --tool cwd
@@ -370,65 +510,62 @@ Expected shape:
 tool cwd: /path/to/ty-term
 ```
 
-The exact path depends on where you run the package script from. In the normal book flow, run commands from `ty-term`, so the process working directory is the package root.
+The exact path depends on where you run the package script from. In the normal
+book flow, run commands from the `ty-term` package root.
+
+Try an unknown tool:
+
+```bash
+bun run dev -- --tool missing
+```
+
+Expected shape:
+
+```text
+Unknown tool: missing
+```
+
+The process exits non-zero because the CLI catch block turns the registry error
+into stderr.
 
 ## How It Works
 
-The new spine artifact is `ToolDefinition`:
+The new tool path has this data flow:
 
-```ts
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  execute(input?: string): Promise<string>;
-}
+```text
+cli.ts
+  -> new ToolRegistry([new CurrentDirectoryTool()])
+  -> toolRegistry.execute("cwd")
+  -> CurrentDirectoryTool.execute()
+  -> print "tool cwd: ..."
 ```
 
-This is deliberately smaller than a real coding agent tool system. The model does not choose a tool. The conversation does not contain tool calls. The CLI directly asks for one tool by name with `--tool cwd`.
+The existing prompt path stays the same:
 
-That gives us the boundary without the full agent loop.
-
-The registry is also plain:
-
-```ts
-export type ToolRegistry = ReadonlyMap<string, ToolDefinition>;
+```text
+cli.ts
+  -> new AgentMessageFactory()
+  -> new EchoModelClient() or new OpenAIModelClient()
+  -> new AgentLoop(messageFactory, modelClient)
+  -> new Conversation()
+  -> await agentLoop.runTurn(conversation, prompt)
+  -> conversation.renderTranscript()
 ```
 
-`createToolRegistry` validates duplicate names once. `getTool` makes lookup inspectable. `executeTool` centralizes the unknown-tool error instead of spreading that check through the CLI.
+Those paths are separate on purpose. Chapter 4 is about the tool boundary, not
+about autonomous tool use.
 
-The toy tool is safe because it does not touch the shell:
+If we wired tools into `AgentLoop` now, the loop would need answers to questions
+we have not taught yet:
 
-```ts
-export function createCurrentDirectoryTool(options?: {
-  cwd?: string;
-}): ToolDefinition {
-  const cwd = options?.cwd ?? process.cwd();
+- How does the model ask for a tool?
+- How do we parse that request?
+- What message records the tool result?
+- Does the model get another turn after the tool runs?
+- What happens if the tool fails?
 
-  return {
-    name: "cwd",
-    description: "Return the current working directory.",
-    async execute() {
-      return cwd;
-    },
-  };
-}
-```
-
-The configurable `cwd` is there for tests. Tests should not depend on the machine's real working directory when the behavior being tested is "the tool result is returned."
-
-## Reference Note
-
-Compare this chapter with:
-
-- `pi-mono/packages/coding-agent/src/core/tools/index.ts`
-- `pi-mono/packages/coding-agent/src/core/tools/read.ts`
-- `pi-mono/packages/agent/src/agent-loop.ts`
-
-`pi-mono` has richer boundaries around schemas, rendering, tool-call preparation, tool-result messages, and extension hooks. For this chapter, we keep only the smallest idea:
-
-> a tool is a named async capability behind a typed boundary.
-
-We are extracting one concept, not copying the reference architecture.
+Those are Chapter 6 questions. For now, `ToolRegistry` can prove the boundary
+without changing model orchestration.
 
 ## Simplifications
 
@@ -439,26 +576,48 @@ This chapter intentionally does not:
 - execute shell commands
 - parse structured tool input
 - stream tool output
-- add permissions, approval, cancellation, or timeouts
+- add permissions, approvals, cancellation, or timeouts
+- persist tool results
 
 The only visible behavior is manual tool execution through the CLI.
 
-That is enough to see where tools live in the program before the tools become powerful.
+That is enough for one chapter. The reader can see where tools live, how they
+are registered, how duplicate names are rejected, and how one execution path
+works without mixing tool logic into `index.ts`, `cli.ts`, or `AgentLoop`.
 
-## Handoff to Chapter 5
+## Handoff To Chapter 5
 
-Chapter 5 replaces the toy-only world with the first real external action: a bash command tool.
+Chapter 4 gives the harness a tool boundary:
+
+```text
+Tool + ToolRegistry + CurrentDirectoryTool
+```
+
+Chapter 5 should add the first tool that performs an external action:
+`BashTool`.
 
 The likely next slice:
 
-- add a `createBashTool()`
+- add `src/tools/BashTool.ts`
+- optionally add `src/tools/CommandExecutor.ts` if command execution needs its
+  own injectable boundary
 - accept a command string as tool input
-- run it through Node's child process APIs
-- return stdout, stderr, and exit status in a controlled format
-- keep the CLI oracle inspectable, for example:
+- run the command behind the `BashTool` object, not in `cli.ts` or `AgentLoop`
+- return stdout, stderr, and exit status in a controlled text format
+- keep `ToolRegistry` as the only dispatch path
+- keep model-driven tool use out of the book until Chapter 6
+
+The likely CLI oracle is:
 
 ```bash
 bun run dev -- --tool bash "pwd"
 ```
 
-Chapter 5 should still avoid a full autonomous loop. The next lesson is command execution as a boundary, not model-driven tool use yet.
+Chapter 5's continuity rule:
+
+```text
+cli.ts composes dependencies.
+ToolRegistry dispatches tools.
+BashTool owns process execution.
+AgentLoop does not execute commands directly.
+```

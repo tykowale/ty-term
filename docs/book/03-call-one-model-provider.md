@@ -1,194 +1,348 @@
 # Chapter 3: Call One Model Provider
 
-## Where We Are
+Chapter 2 gave the harness its first real domain objects:
 
-Chapter 2 gave the harness a tiny conversation loop:
+- `AgentMessage`, the role-tagged record of one thing said in the conversation
+- `AgentMessageFactory`, the owner of message construction
+- `Conversation`, the owner of ordered message history and transcript rendering
 
-- `AgentRole = "user" | "assistant"`
-- `AgentMessage`
-- `Conversation`
-- message constructors
-- `runTurn(conversation, prompt)`
-- `renderTranscript`
-- a CLI that runs one fake assistant turn
+That chapter still faked the assistant:
 
-That was enough to prove the shape of the loop, but the assistant response was still hard-coded. In this chapter, we add the first real boundary: a model client.
+```text
+user: hello
+assistant: agent heard: hello
+```
 
-The important move is not "use OpenAI everywhere." The important move is that the loop should not care where assistant text comes from.
+The fake response lived in `Conversation.runTurn()` because, at that point, a
+turn was only a local state change:
 
-We are still in one package rooted at `ty-term`. The new concept is a boundary, not a new directory structure.
+```text
+append user message
+append fake assistant message
+```
 
-## Learning Objective
+This chapter changes that. A turn now crosses a model boundary. That means
+`Conversation` should stop owning the turn. It should keep owning the data it is
+good at owning: message storage, safe access, and transcript rendering.
 
-By the end of this chapter, the harness will:
+The new owner is `AgentLoop`.
 
-- define a `ModelClient` interface
-- keep a no-key `createEchoModelClient()` for tests and local learning
-- add one real provider through the official `openai` package
-- make `runTurn` async
-- keep tests deterministic by using the echo client only
-- let the CLI run without an API key by default
+```text
+src/
+  agent/
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+    AgentLoop.ts
+  model/
+    ModelClient.ts
+    EchoModelClient.ts
+    OpenAIModelClient.ts
+  cli.ts
+  index.ts
+tests/
+  agent-loop.test.ts
+```
 
-The chapter stays runnable for every reader. A real model call is optional.
+The no-key path stays deterministic:
 
-## Chapter 1 Setup Update
+```text
+$ bun run dev -- "hello"
+user: hello
+assistant: agent heard: hello
+```
 
-Chapter 1's root `package.json` should already include `openai`:
+But the source of assistant text is no longer hard-coded into the conversation.
 
-```json
-{
-  "dependencies": {
-    "openai": "^6.34.0"
+## The New Boundary
+
+The important move in this chapter is not "add OpenAI." The important move is:
+
+```text
+Conversation owns history.
+AgentLoop owns orchestration.
+ModelClient owns provider interaction.
+```
+
+That separation gives each object a narrow job:
+
+- `Conversation` stores messages and renders a transcript.
+- `AgentLoop` decides what happens during one turn.
+- `ModelClient` turns conversation context into assistant text.
+- `cli.ts` composes the objects and prints the result.
+
+This keeps the dependency direction clean:
+
+```text
+cli.ts
+  -> AgentLoop
+  -> Conversation + AgentMessageFactory + ModelClient
+```
+
+`cli.ts` is allowed to know about command-line flags and environment variables.
+It should not know how to build a provider request. `Conversation` is allowed to
+know how to append messages. It should not know whether assistant text came from
+an echo client, OpenAI, a local model, or a future tool-aware loop.
+
+## Moving `runTurn()` Out Of `Conversation`
+
+Chapter 2 used this shape:
+
+```ts
+conversation.runTurn("hello");
+```
+
+That was a temporary simplification. It let the book introduce message history
+before introducing model calls.
+
+Now the call becomes:
+
+```ts
+await agentLoop.runTurn(conversation, "hello");
+```
+
+That may look like a small change, but it moves an important responsibility.
+`Conversation` no longer decides how assistant messages are produced. It only
+records messages after another object decides what the messages are.
+
+The revised `Conversation` keeps the storage methods from Chapter 2 and replaces
+`runTurn()` with `appendMessages()`:
+
+```ts
+import type { AgentMessage } from "./AgentMessage";
+
+export class Conversation {
+  private readonly messages: AgentMessage[];
+
+  constructor(messages: AgentMessage[] = []) {
+    this.messages = messages.map((message) => ({ ...message }));
+  }
+
+  appendMessages(...messages: AgentMessage[]): void {
+    this.messages.push(...messages.map((message) => ({ ...message })));
+  }
+
+  getMessages(): AgentMessage[] {
+    return this.messages.map((message) => ({ ...message }));
+  }
+
+  renderTranscript(): string {
+    return this.messages
+      .map((message) => `${message.role}: ${message.content}`)
+      .join("\n");
   }
 }
 ```
 
-The official OpenAI JavaScript/TypeScript SDK supports the Responses API with `client.responses.create(...)` and exposes `response.output_text` for text output. See the official Node SDK and library docs:
-
-- https://github.com/openai/openai-node
-- https://platform.openai.com/docs/libraries/node-js-library
-
-## Build The Slice
-
-We are going to change one thing about the loop.
-
-Chapter 2:
+Notice what disappeared:
 
 ```ts
-runTurn(conversation, prompt);
+runTurn(prompt: string): void
 ```
 
-Chapter 3:
+That method had to go because a turn now means more than "append two local
+messages." It means "build a user message, ask a model for assistant text, build
+an assistant message, then append both messages in order."
+
+That is orchestration, so it belongs one level up.
+
+## The Model Interface
+
+The model boundary starts with an interface in `src/model/ModelClient.ts`:
 
 ```ts
-await runTurn(conversation, prompt, modelClient);
+import type { AgentMessage } from "../agent/AgentMessage";
+
+export interface ModelClient {
+  createResponse(messages: AgentMessage[]): Promise<string>;
+}
 ```
 
-That one extra argument gives the loop a dependency it can call. Tests pass an echo client. The CLI can pass either echo or OpenAI.
+The interface receives messages, not a raw prompt. A model provider needs the
+conversation context in order:
 
-## `ty-term/package.json`
+```text
+earlier user message
+earlier assistant message
+new user message
+```
 
-If your Chapter 1 file does not already include `openai`, update it now:
+For this chapter, the model client returns plain assistant text. Later chapters
+will need richer results for tool calls, but adding that now would blur the
+lesson. The first boundary is simply:
 
-```json
-{
-  "name": "ty-term",
-  "private": true,
-  "version": "0.1.0",
-  "description": "A minimal terminal coding harness built as a teaching project.",
-  "type": "module",
-  "packageManager": "bun@1.3.5",
-  "bin": {
-    "hobby-agent": "./dist/cli.js"
-  },
-  "scripts": {
-    "build": "bun build src/cli.ts --outfile dist/cli.js --target bun",
-    "test": "bun test",
-    "dev": "bun run src/cli.ts"
-  },
-  "dependencies": {
-    "openai": "^6.34.0"
-  },
-  "devDependencies": {
-    "bun-types": "^1.3.5",
-    "typescript": "^6.0.3"
+```text
+AgentMessage[] -> assistant text
+```
+
+It is async because real providers are async. Even the deterministic echo client
+implements the same async interface so the rest of the loop has one shape.
+
+## A Deterministic Model Client
+
+Tests should not call a real model. They should not need credentials, network
+access, provider availability, or stable model output.
+
+So the first implementation is `src/model/EchoModelClient.ts`:
+
+```ts
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
+
+export class EchoModelClient implements ModelClient {
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === "user");
+
+    return `agent heard: ${lastUserMessage?.content ?? ""}`;
   }
 }
 ```
 
-## `src/index.ts`
+This class is intentionally boring. It is not pretending to be intelligent. It
+only gives the loop a stable model-shaped dependency.
+
+It also proves why the interface accepts message history. The echo client could
+have accepted a single prompt, but then tests would not exercise the same shape
+that a real provider needs. By reading the latest user message from the context,
+the fake client behaves like a tiny implementation of the real boundary.
+
+## A Real Provider Client
+
+The second implementation is `src/model/OpenAIModelClient.ts`:
 
 ```ts
 import OpenAI from "openai";
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
 
-export type AgentRole = "user" | "assistant";
+export class OpenAIModelClient implements ModelClient {
+  private readonly client: OpenAI;
 
-export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-}
+  constructor(
+    private readonly model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    client = new OpenAI(),
+  ) {
+    this.client = client;
+  }
 
-export type Conversation = AgentMessage[];
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model,
+      input: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    });
 
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
-}
-
-export function createUserMessage(content: string): AgentMessage {
-  return { role: "user", content };
-}
-
-export function createAssistantMessage(content: string): AgentMessage {
-  return { role: "assistant", content };
-}
-
-export function createEchoModelClient(): ModelClient {
-  return {
-    async createResponse(prompt: string): Promise<string> {
-      return `agent heard: ${prompt}`;
-    },
-  };
-}
-
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-): ModelClient {
-  const client = new OpenAI();
-
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const response = await client.responses.create({
-        model,
-        input: [
-          ...conversation.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          { role: "user", content: prompt },
-        ],
-      });
-
-      return response.output_text;
-    },
-  };
-}
-
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-
-  return [...conversation, userMessage, assistantMessage];
-}
-
-export function renderTranscript(conversation: Conversation): string {
-  return conversation
-    .map((message) => `${message.role}: ${message.content}`)
-    .join("\n");
+    return response.output_text;
+  }
 }
 ```
 
-## `src/cli.ts`
+This class hides the provider-specific details:
+
+- how to construct the SDK client
+- which model name to use
+- how to map `AgentMessage` into provider input
+- where to read text from the provider response
+
+The rest of the harness only sees `ModelClient`.
+
+The constructor accepts an optional `client` so tests in later chapters can
+inject a recording fake if they need to inspect provider input. Chapter 3's
+deterministic tests should still use `EchoModelClient`; they do not need to
+mock the OpenAI SDK.
+
+## The Agent Loop
+
+Now we can name the object that owns a turn.
+
+`src/agent/AgentLoop.ts`:
+
+```ts
+import { AgentMessageFactory } from "./AgentMessageFactory";
+import type { Conversation } from "./Conversation";
+import type { ModelClient } from "../model/ModelClient";
+
+export class AgentLoop {
+  constructor(
+    private readonly messageFactory: AgentMessageFactory,
+    private readonly modelClient: ModelClient,
+  ) {}
+
+  async runTurn(conversation: Conversation, prompt: string): Promise<void> {
+    const userMessage = this.messageFactory.createUserMessage(prompt);
+    const modelContext = [...conversation.getMessages(), userMessage];
+    const assistantContent =
+      await this.modelClient.createResponse(modelContext);
+    const assistantMessage =
+      this.messageFactory.createAssistantMessage(assistantContent);
+
+    conversation.appendMessages(userMessage, assistantMessage);
+  }
+}
+```
+
+Read the method in order:
+
+```text
+create user message
+copy current conversation context
+include the pending user message
+ask the model for assistant text
+create assistant message
+append user + assistant to the conversation
+```
+
+The loop asks the model before mutating the conversation. That means a failed
+model call does not leave a half-written turn with a user message but no
+assistant message. That is a deliberate invariant for this chapter:
+
+```text
+Conversation contains complete turns after AgentLoop.runTurn() succeeds.
+```
+
+Later we may choose to record failed turns or partial events. That should be a
+deliberate design change, not an accident caused by mutation order.
+
+The loop also does not render anything. Rendering still belongs to
+`Conversation`, and printing still belongs to `cli.ts`.
+
+## The Barrel File
+
+`src/index.ts` remains a barrel. It exports the public objects without
+implementing behavior:
+
+```ts
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+```
+
+This rule matters more as the book grows. `index.ts` is a public import surface,
+not a junk drawer for agent behavior.
+
+## The CLI Composes Dependencies
+
+The CLI now chooses a model client and wires the objects together.
+
+`src/cli.ts`:
 
 ```ts
 #!/usr/bin/env bun
 
 import {
-  type Conversation,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  renderTranscript,
-  runTurn,
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  EchoModelClient,
+  OpenAIModelClient,
 } from "./index";
 
 const args = process.argv.slice(2);
@@ -205,59 +359,159 @@ if (useOpenAI && !process.env.OPENAI_API_KEY) {
   process.exit(1);
 }
 
-const modelClient = useOpenAI
-  ? createOpenAIModelClient()
-  : createEchoModelClient();
-const conversation: Conversation = [];
-const nextConversation = await runTurn(conversation, prompt, modelClient);
+const messageFactory = new AgentMessageFactory();
+const modelClient = useOpenAI ? new OpenAIModelClient() : new EchoModelClient();
+const agentLoop = new AgentLoop(messageFactory, modelClient);
+const conversation = new Conversation();
 
-console.log(renderTranscript(nextConversation));
+await agentLoop.runTurn(conversation, prompt);
+
+console.log(conversation.renderTranscript());
 ```
 
-The CLI uses a flag instead of silently switching when `OPENAI_API_KEY` exists. That keeps the default path no-key and deterministic. A reader can keep an API key in their shell without accidentally spending tokens while following the early chapters.
+This file still has a few responsibilities, but they are process-level
+responsibilities:
 
-## `tests/agent.test.ts`
+- read process arguments
+- choose whether `--openai` was requested
+- reject a missing prompt
+- reject a missing API key when the real provider is requested
+- construct the objects for this process
+- print the transcript
 
-Update the Chapter 2 test file with this behavior-focused version:
+It does not build messages, call the provider SDK, append conversation history,
+or render transcript lines itself.
+
+The `--openai` flag is explicit. The CLI does not silently switch to a real
+provider just because `OPENAI_API_KEY` exists in the shell. That keeps the
+default chapter path deterministic and no-cost.
+
+## The Tests
+
+The tests should lock down the object boundaries:
+
+- `EchoModelClient` is deterministic.
+- `AgentLoop` appends a complete user/assistant turn.
+- `AgentLoop` passes prior context to the model.
+- `Conversation` still renders the final transcript.
+- The optional OpenAI path is selected by the CLI flag, not by accident.
+
+Start with `tests/agent-loop.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
 import {
-  createEchoModelClient,
-  renderTranscript,
-  runTurn,
-  type Conversation,
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  EchoModelClient,
+  type AgentMessage,
+  type ModelClient,
 } from "../src/index";
 
-describe("runTurn", () => {
-  it("adds a user message followed by the model response", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
+class RecordingModelClient implements ModelClient {
+  public receivedMessages: AgentMessage[] = [];
 
-    expect(conversation).toEqual([
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    this.receivedMessages = messages;
+    return "model response";
+  }
+}
+
+describe("EchoModelClient", () => {
+  it("echoes the latest user message from the provided context", async () => {
+    const modelClient = new EchoModelClient();
+
+    await expect(
+      modelClient.createResponse([
+        { role: "user", content: "first" },
+        { role: "assistant", content: "agent heard: first" },
+        { role: "user", content: "second" },
+      ]),
+    ).resolves.toBe("agent heard: second");
+  });
+});
+
+describe("AgentLoop", () => {
+  it("adds a user message followed by the model response", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
+    );
+
+    await agentLoop.runTurn(conversation, "hello");
+
+    expect(conversation.getMessages()).toEqual([
       { role: "user", content: "hello" },
       { role: "assistant", content: "agent heard: hello" },
     ]);
   });
 
-  it("does not mutate the previous conversation", async () => {
-    const original: Conversation = [{ role: "user", content: "earlier" }];
+  it("passes prior conversation plus the new user message to the model", async () => {
+    const modelClient = new RecordingModelClient();
+    const conversation = new Conversation([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
+    ]);
+    const agentLoop = new AgentLoop(new AgentMessageFactory(), modelClient);
 
-    await runTurn(original, "next", createEchoModelClient());
+    await agentLoop.runTurn(conversation, "next");
 
-    expect(original).toEqual([{ role: "user", content: "earlier" }]);
+    expect(modelClient.receivedMessages).toEqual([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
+      { role: "user", content: "next" },
+    ]);
   });
 
-  it("renders a transcript", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
+  it("renders the completed transcript through Conversation", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
+    );
 
-    expect(renderTranscript(conversation)).toBe(
+    await agentLoop.runTurn(conversation, "hello");
+
+    expect(conversation.renderTranscript()).toBe(
       "user: hello\nassistant: agent heard: hello",
     );
   });
 });
 ```
 
-Tests use `createEchoModelClient()` only. They do not need network access, credentials, model availability, or stable model output.
+These tests do not touch `OpenAIModelClient`. The real provider is intentionally
+an optional runtime path, not the chapter's correctness oracle.
+
+If you want a CLI-level test for the optional provider flag, keep it focused on
+the guard behavior:
+
+```ts
+import { describe, expect, it } from "bun:test";
+
+describe("CLI provider selection", () => {
+  it("requires OPENAI_API_KEY when --openai is requested", async () => {
+    const proc = Bun.spawn({
+      cmd: ["bun", "run", "src/cli.ts", "--openai", "hello"],
+      env: {
+        ...process.env,
+        OPENAI_API_KEY: "",
+      },
+      stderr: "pipe",
+    });
+
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("OPENAI_API_KEY is required");
+  });
+});
+```
+
+That test still does not call OpenAI. It only proves that the real-provider path
+is opt-in and guarded.
 
 ## Try It
 
@@ -279,7 +533,7 @@ Run tests:
 bun test
 ```
 
-Run the CLI without an API key:
+Run the deterministic CLI path:
 
 ```bash
 bun run dev -- "hello"
@@ -295,14 +549,14 @@ assistant: agent heard: hello
 Optionally call the real provider:
 
 ```bash
-OPENAI_API_KEY=your_api_key bun run dev -- --openai "Explain what a model boundary is in one sentence"
+OPENAI_API_KEY=your_api_key bun run dev -- --openai "Explain a model boundary in one sentence"
 ```
 
 Expected shape:
 
 ```text
-user: Explain what a model boundary is in one sentence
-assistant: A model boundary is the small interface where your application hands conversation context to a model provider and receives assistant text back.
+user: Explain a model boundary in one sentence
+assistant: A model boundary is the interface where application-owned conversation state is converted into a provider request and returned as assistant text.
 ```
 
 The exact assistant text will vary because this command calls a real model.
@@ -315,50 +569,37 @@ OPENAI_API_KEY=your_api_key OPENAI_MODEL=gpt-5.2 bun run dev -- --openai "Say he
 
 ## How It Works
 
-`ModelClient` is the first real boundary in the harness:
+The chapter's data flow is:
 
-```ts
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
-}
+```text
+cli.ts
+  -> new AgentMessageFactory()
+  -> new EchoModelClient() or new OpenAIModelClient()
+  -> new AgentLoop(messageFactory, modelClient)
+  -> new Conversation()
+  -> await agentLoop.runTurn(conversation, prompt)
+  -> conversation.renderTranscript()
 ```
 
-The core loop knows only this:
+The architectural shift from Chapter 2 is this:
 
-1. create a user message
-2. ask a model client for assistant text
-3. create an assistant message
-4. return a new conversation
+```text
+Chapter 2:
+Conversation.runTurn(prompt)
 
-That makes `runTurn` independent from OpenAI, test doubles, local models, or future tool-aware model clients.
-
-The echo client is intentionally boring:
-
-```ts
-return `agent heard: ${prompt}`;
+Chapter 3:
+AgentLoop.runTurn(conversation, prompt)
 ```
 
-It is not pretending to be intelligent. It gives the tests a stable oracle.
+That keeps `Conversation` from turning into a god object. It owns state. It does
+not own provider calls.
 
-`runTurn` becomes async because real model calls are async:
+The `ModelClient` interface is also deliberately small. It does not expose SDK
+objects, request options, streaming events, retries, or provider-specific
+response shapes. The loop asks for assistant text and receives assistant text.
 
-```ts
-const assistantContent = await modelClient.createResponse(prompt, conversation);
-```
-
-That is the main design pressure introduced in this chapter. Once the agent loop crosses a network boundary, the rest of the loop must be able to wait.
-
-## Reference Note
-
-Compare this chapter with:
-
-- `pi-mono/packages/agent/src/agent-loop.ts`
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-- `pi-mono/packages/ai/src/stream.ts`
-
-`pi-mono` has to think about streaming, cancellation, tool calls, retries, telemetry, context limits, provider configuration, and error reporting. Chapter 3 only needs the first boundary:
-
-> given a conversation, return assistant text.
+That is enough for one model call. Future chapters will widen this boundary only
+when the code needs more behavior.
 
 ## Simplifications
 
@@ -367,26 +608,42 @@ We are deliberately not adding:
 - streaming output
 - system or developer messages
 - tool calls
-- retry configuration
+- retries
 - token counting
 - conversation truncation
-- provider registry
-- multiple model vendors
+- provider registries
+- multiple real model vendors
 - snapshot tests for real model output
 
-Those are real concerns, but adding them now would blur the lesson. The important step is making the loop async and provider-independent.
+Those are real concerns, but adding them here would hide the lesson. The lesson
+is that a model call is a boundary, and orchestration belongs in `AgentLoop`, not
+in `Conversation`, `cli.ts`, or `index.ts`.
 
-## Handoff to Chapter 4
+## Handoff To Chapter 4
 
-Chapter 3 gives the harness a model boundary.
+Chapter 3 gives the harness a model boundary and a real orchestration object:
 
-Chapter 4 adds the next boundary: tools.
+```text
+AgentLoop + ModelClient
+```
+
+Chapter 4 should add the next boundary: tools.
 
 The next useful slice is:
 
-- define a `ToolDefinition` interface
-- add one safe toy tool, such as `getCurrentDirectory`
-- keep tool execution separate from model calling
-- teach the loop how to represent "the assistant wants a tool" without building a full agent yet
+- introduce `src/tools/Tool.ts`
+- introduce `src/tools/ToolRegistry.ts`
+- implement one safe toy tool, such as `CurrentDirectoryTool`
+- keep tool lookup and execution out of `cli.ts`
+- pass a tool registry into `AgentLoop` only when the loop needs it
 
-At that point, the harness will have the two basic edges of a coding agent: one boundary for model text and one boundary for actions in the terminal.
+The continuity rule for Chapter 4 is the same one this chapter followed:
+
+```text
+Conversation stores and renders messages.
+AgentLoop orchestrates the turn.
+ToolRegistry owns tool lookup and execution dispatch.
+```
+
+Do not put tool helpers back into `src/index.ts`, and do not make `cli.ts`
+execute tools directly.

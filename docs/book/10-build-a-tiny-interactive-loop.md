@@ -1,25 +1,23 @@
 # Chapter 10: Build a Tiny Interactive Loop
 
-## Where We Are
-
-Chapter 9 gave `ty-term` the main pieces of a tiny coding harness:
+Chapter 9 gave `ty-term` the last model-facing input it needed:
 
 ```text
-conversation history -> optional JSONL session
-project root -> AGENTS.md model context
-model turn -> allowlisted tool registry
+Conversation -> persisted user, assistant, and tool messages
+ModelContext -> project instructions loaded from AGENTS.md
+AgentLoop -> one complete model/tool turn
 ```
 
-But the CLI still behaves like a one-shot command. Every prompt starts a new process:
+That works for one-shot commands:
 
 ```bash
-bun run dev -- "hello"
-bun run dev -- --session lesson-9 "what did I say?"
+bun run dev -- --session lesson-9 "read file package.json"
 ```
 
-That is useful for tests, but a terminal harness should stay alive while the human keeps asking questions.
+But a terminal coding harness should not make the user restart the process for
+every prompt. It should keep a conversation alive while the human keeps typing.
 
-This chapter adds the smallest interactive mode:
+This chapter adds the smallest useful interactive mode:
 
 ```bash
 bun run dev -- --interactive
@@ -31,112 +29,125 @@ or:
 bun run dev -- -i
 ```
 
-Inside that process, `ty-term` keeps an in-memory conversation across prompts. If `--session <id>` is supplied, it also appends each completed turn to JSONL.
+The new object is `InteractiveLoop`.
 
-## Learning Objective
+```text
+InteractiveLoop owns repeated terminal turns.
+cli.ts owns process setup and dependency composition.
+```
 
-Learn the difference between a one-shot turn and a process-level loop:
+That split matters. If we put the loop directly in `cli.ts`, the CLI becomes the
+place where process arguments, project instructions, session persistence,
+prompting, transcript display, and agent behavior all meet. That is exactly the
+shape this refactor is avoiding.
+
+## Where This Fits
+
+At the end of Chapter 9, the main boundaries were:
+
+```text
+Conversation stores and renders messages.
+AgentMessageFactory creates user, assistant, and tool messages.
+ModelContext carries model-facing context.
+ProjectInstructions loads AGENTS.md and creates ModelContext.
+ToolRegistry owns lookup and dispatch.
+JsonlSessionStore persists plain AgentMessage records.
+AgentLoop orchestrates one turn.
+cli.ts composes dependencies and prints one-shot output.
+```
+
+Chapter 10 keeps those boundaries and adds a terminal layer:
+
+```text
+parseArgs owns command-line flag parsing.
+InteractiveLoop owns repeated prompting and per-turn display.
+cli.ts wires everything together.
+```
+
+The flow becomes:
 
 ```mermaid
 flowchart LR
-  Start[CLI starts] --> Root[Resolve project root]
-  Root --> Agents[Load AGENTS.md once]
-  Agents --> Session{--session?}
-  Session -->|yes| Load[Load JSONL once]
-  Session -->|no| Empty[Start empty conversation]
-  Load --> Prompt[Read a line]
-  Empty --> Prompt
-  Prompt --> Turn[Run one model/tool turn]
-  Turn --> Append{--session?}
-  Append -->|yes| JSONL[Append new messages]
-  Append -->|no| Memory[Keep in memory]
-  JSONL --> Prompt
-  Memory --> Prompt
+  CLI[cli.ts] --> Args[parseArgs]
+  CLI --> Project[ProjectInstructions.load]
+  Project --> Context[ModelContext]
+  CLI --> Store[JsonlSessionStore]
+  Store --> Conversation[Conversation]
+  CLI --> Agent[AgentLoop]
+  CLI --> Loop[InteractiveLoop]
+  Loop --> Agent
+  Loop --> Store
+  Loop --> Conversation
+  Loop --> Output[terminal output]
 ```
 
-The invariant is:
+The invariant for this chapter is:
 
-> Interactive mode owns the conversation between prompts. A session file is only the optional durable copy.
-
-## Build The Slice
-
-Change two source files and the tests:
-
-- `src/cli.ts`
-- `tests/agent.test.ts`
-
-`src/index.ts` does not need new domain logic. The interactive loop is CLI behavior, so it can live in `cli.ts` for now.
-
-No new dependencies are needed. This chapter uses `node:readline/promises`.
-
-## `src/cli.ts`
-
-Add readline and direct-run imports:
-
-```ts
-#!/usr/bin/env node
-import { stdin, stdout } from "node:process";
-import { createInterface } from "node:readline/promises";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
+```text
+InteractiveLoop coordinates repeated turns, but it does not create the world.
 ```
 
-Keep the existing imports from `index.ts`, and add the types and helpers needed by the loop:
+It receives `AgentLoop`, `Conversation`, `SessionStore`, and `ModelContext` from
+`cli.ts`. It does not load `AGENTS.md`. Project instructions remain model
+context, not session messages.
 
-```ts
-import {
-  type Conversation,
-  type ModelClient,
-  type ToolRegistry,
-  appendSessionMessages,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createReadFileTool,
-  createToolRegistry,
-  executeTool,
-  loadProjectInstructions,
-  loadSessionMessages,
-  renderTranscript,
-  resolveProjectRoot,
-  runSessionTurn,
-  runTurnWithTools,
-  validateSessionId,
-} from "./index";
+## The File Layout
+
+Add a terminal folder:
+
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    ModelContext.ts
+    OpenAIModelClient.ts
+  project/
+    ProjectInstructions.ts
+  session/
+    JsonlSessionStore.ts
+    SessionStore.ts
+  terminal/
+    InteractiveLoop.ts
+    parseArgs.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    ReadFileTool.ts
+    Tool.ts
+    ToolRegistry.ts
+    ToolRequestParser.ts
+  cli.ts
+  index.ts
+tests/
+  interactive-loop.test.ts
 ```
 
-Extend parsed args:
+`src/index.ts` stays a barrel file. It exports the terminal objects, but it does
+not implement terminal behavior.
+
+## Parse Arguments Outside The CLI
+
+Argument parsing is small, but it is still behavior. Pull it out before adding
+the loop so `cli.ts` does not become the dumping ground again.
+
+Create `src/terminal/parseArgs.ts`:
 
 ```ts
-interface ParsedArgs {
-  useOpenAI: boolean;
-  interactive: boolean;
-  sessionId?: string;
-  toolName?: string;
-  toolInput?: string;
-  prompt: string;
+export interface ParsedArgs {
+  readonly useOpenAI: boolean;
+  readonly interactive: boolean;
+  readonly sessionId?: string;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
 }
-```
 
-Add an exported loop options type. Exporting it makes the loop testable without spawning a child process:
-
-```ts
-export interface InteractiveLoopOptions {
-  conversation: Conversation;
-  input: NodeJS.ReadableStream;
-  output: NodeJS.WritableStream;
-  modelClient: ModelClient;
-  projectRoot: string;
-  projectInstructions: string;
-  toolRegistry: ToolRegistry;
-  sessionId?: string;
-}
-```
-
-Update `parseArgs`:
-
-```ts
 export function parseArgs(args: string[]): ParsedArgs {
   let useOpenAI = false;
   let interactive = false;
@@ -171,7 +182,13 @@ export function parseArgs(args: string[]): ParsedArgs {
     }
 
     if (arg === "--tool") {
-      toolName = args[index + 1];
+      const nextArg = args[index + 1];
+
+      if (!nextArg || nextArg.startsWith("--")) {
+        throw new Error("--tool requires a tool name.");
+      }
+
+      toolName = nextArg;
       toolInput = args.slice(index + 2).join(" ");
       break;
     }
@@ -190,81 +207,193 @@ export function parseArgs(args: string[]): ParsedArgs {
 }
 ```
 
-Add the interactive loop:
+This is not a parser framework. It is a tiny object boundary. The rest of the
+program should receive a `ParsedArgs` value instead of reaching into
+`process.argv`.
+
+## InteractiveLoop Owns Repetition
+
+`AgentLoop` already knows how to run one turn:
+
+```text
+prompt + conversation + model context -> appended messages
+```
+
+The interactive loop should not duplicate that. It should ask for a line, hand
+that line to `AgentLoop`, display only the messages added by that turn, and
+repeat.
+
+Create `src/terminal/InteractiveLoop.ts`:
 
 ```ts
-export async function runInteractiveLoop(
-  options: InteractiveLoopOptions,
-): Promise<Conversation> {
-  let conversation = options.conversation;
-  const readline = createInterface({
-    input: options.input,
-    output: options.output,
-    prompt: "> ",
-  });
-  let closed = false;
+import { createInterface } from "node:readline/promises";
+import type { AgentLoop } from "../agent/AgentLoop";
+import type { Conversation } from "../agent/Conversation";
+import type { ModelContext } from "../model/ModelContext";
+import type { SessionStore } from "../session/SessionStore";
 
-  readline.once("close", () => {
-    closed = true;
-  });
+export interface InteractiveLoopOptions {
+  readonly agentLoop: AgentLoop;
+  readonly conversation: Conversation;
+  readonly context: ModelContext;
+  readonly input: NodeJS.ReadableStream;
+  readonly output: NodeJS.WritableStream;
+  readonly sessionStore?: SessionStore;
+  readonly sessionId?: string;
+}
 
-  try {
-    readline.prompt();
+export class InteractiveLoop {
+  private readonly agentLoop: AgentLoop;
+  private readonly conversation: Conversation;
+  private readonly context: ModelContext;
+  private readonly input: NodeJS.ReadableStream;
+  private readonly output: NodeJS.WritableStream;
+  private readonly sessionStore?: SessionStore;
+  private readonly sessionId?: string;
 
-    for await (const line of readline) {
-      const prompt = line.trim();
-
-      if (prompt === "/exit") {
-        break;
-      }
-
-      if (prompt.length === 0) {
-        if (!closed) {
-          readline.prompt();
-        }
-        continue;
-      }
-
-      const nextConversation = await runTurnWithTools(
-        conversation,
-        prompt,
-        options.modelClient,
-        options.toolRegistry,
-        { projectInstructions: options.projectInstructions },
-      );
-      const appendedMessages = nextConversation.slice(conversation.length);
-
-      if (options.sessionId) {
-        await appendSessionMessages(
-          options.projectRoot,
-          options.sessionId,
-          appendedMessages,
-        );
-      }
-
-      options.output.write(`${renderTranscript(appendedMessages)}\n`);
-      conversation = nextConversation;
-
-      if (!closed) {
-        readline.prompt();
-      }
-    }
-  } finally {
-    readline.close();
+  constructor(options: InteractiveLoopOptions) {
+    this.agentLoop = options.agentLoop;
+    this.conversation = options.conversation;
+    this.context = options.context;
+    this.input = options.input;
+    this.output = options.output;
+    this.sessionStore = options.sessionStore;
+    this.sessionId = options.sessionId;
   }
 
-  return conversation;
+  async run(): Promise<Conversation> {
+    const readline = createInterface({
+      input: this.input,
+      output: this.output,
+      prompt: "> ",
+    });
+
+    try {
+      readline.prompt();
+
+      for await (const line of readline) {
+        const prompt = line.trim();
+
+        if (this.shouldExit(prompt)) {
+          break;
+        }
+
+        if (prompt.length === 0) {
+          readline.prompt();
+          continue;
+        }
+
+        await this.runPrompt(prompt);
+        readline.prompt();
+      }
+    } finally {
+      readline.close();
+    }
+
+    return this.conversation;
+  }
+
+  private shouldExit(prompt: string): boolean {
+    return prompt === "/exit" || prompt === "/quit";
+  }
+
+  private async runPrompt(prompt: string): Promise<void> {
+    const startingLength = this.conversation.length;
+
+    await this.agentLoop.runTurn(this.conversation, prompt, this.context);
+
+    const appendedMessages = this.conversation.messagesSince(startingLength);
+
+    if (this.sessionStore && this.sessionId) {
+      await this.sessionStore.append(this.sessionId, appendedMessages);
+    }
+
+    this.output.write(
+      `${Conversation.fromMessages(appendedMessages).renderTranscript()}\n`,
+    );
+  }
 }
 ```
 
-Two details matter:
+This class owns the loop-specific decisions:
 
-- The loop uses `for await (const line of readline)` so EOF and Ctrl-D end naturally.
-- It tracks `closed` before prompting again, because prompting after a piped input closes can throw.
+```text
+Prompt repeatedly.
+Ignore blank lines.
+Exit on /exit or /quit.
+Run one agent turn per line.
+Persist only the messages appended by that line.
+Display only the messages appended by that line.
+```
 
-Update `main` so interactive mode is another model path:
+It refuses to own everything else:
+
+```text
+It does not parse process arguments.
+It does not load AGENTS.md.
+It does not create tools.
+It does not choose OpenAI vs Echo.
+It does not know where session files live.
+```
+
+The most important line is:
 
 ```ts
+const startingLength = this.conversation.length;
+```
+
+The loop records the conversation length before the turn. After `AgentLoop`
+mutates the conversation, the loop asks for only the appended messages:
+
+```ts
+const appendedMessages = this.conversation.messagesSince(startingLength);
+```
+
+That gives the terminal a focused display while preserving the full in-memory
+conversation.
+
+## The CLI Becomes The Composition Root
+
+Now update `src/cli.ts`. The CLI still has work to do, but the work is wiring:
+
+```text
+parse process args
+validate flags
+resolve project root
+load project instructions
+create ModelContext
+create session store
+create tools
+create model client
+create AgentLoop
+create Conversation
+choose one-shot or interactive execution
+```
+
+That is composition. The CLI is not the owner of the terminal loop.
+
+```ts
+#!/usr/bin/env bun
+
+import { stdin, stdout } from "node:process";
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  InteractiveLoop,
+  JsonlSessionStore,
+  OpenAIModelClient,
+  ProjectInstructions,
+  ReadFileTool,
+  ToolRegistry,
+  parseArgs,
+  resolveProjectRoot,
+  validateSessionId,
+} from "./index";
+
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const projectRoot = resolveProjectRoot();
@@ -274,13 +403,13 @@ async function main(): Promise<void> {
   }
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: projectRoot }),
-      createBashTool({ cwd: projectRoot }),
-      createReadFileTool({ projectRoot }),
+    const manualToolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(projectRoot),
+      new BashTool({ cwd: projectRoot }),
+      new ReadFileTool(projectRoot),
     ]);
-    const result = await executeTool(
-      registry,
+
+    const result = await manualToolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -290,109 +419,191 @@ async function main(): Promise<void> {
   }
 
   if (!parsed.interactive && parsed.prompt.length === 0) {
-    console.error(
-      'Usage: bun run dev -- [--session id] [--openai] [--interactive] "your prompt"',
+    process.stderr.write(
+      [
+        'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
+        "       bun run dev -- --interactive",
+        "       bun run dev -- --tool cwd",
+        '       bun run dev -- --tool bash "pwd"',
+        "       bun run dev -- --tool read_file package.json",
+        "",
+      ].join("\n"),
     );
     process.exit(1);
   }
 
   if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is required when using --openai.");
+    process.stderr.write("OPENAI_API_KEY is required when using --openai.\n");
     process.exit(1);
   }
 
-  const projectInstructions = await loadProjectInstructions(projectRoot);
+  const projectInstructions = await ProjectInstructions.load(projectRoot);
+  const modelContext = projectInstructions.toModelContext();
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const modelToolRegistry = createToolRegistry([
-    createCurrentDirectoryTool({ cwd: projectRoot }),
-    createReadFileTool({ projectRoot }),
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const modelToolRegistry = new ToolRegistry([
+    new CurrentDirectoryTool(projectRoot),
+    new ReadFileTool(projectRoot),
   ]);
-
-  if (parsed.interactive) {
-    const conversation = parsed.sessionId
-      ? await loadSessionMessages(projectRoot, parsed.sessionId)
-      : [];
-
-    await runInteractiveLoop({
-      conversation,
-      input: stdin,
-      output: stdout,
-      modelClient,
-      projectRoot,
-      projectInstructions,
-      toolRegistry: modelToolRegistry,
-      sessionId: parsed.sessionId,
-    });
-    return;
-  }
-
-  if (parsed.sessionId) {
-    const result = await runSessionTurn({
-      projectRoot,
-      sessionId: parsed.sessionId,
-      prompt: parsed.prompt,
-      modelClient,
-      toolRegistry: modelToolRegistry,
-      projectInstructions,
-    });
-
-    process.stdout.write(`${renderTranscript(result.nextConversation)}\n`);
-    return;
-  }
-
-  const conversation: Conversation = [];
-  const nextConversation = await runTurnWithTools(
-    conversation,
-    parsed.prompt,
+  const agentLoop = new AgentLoop(
+    messageFactory,
     modelClient,
     modelToolRegistry,
-    { projectInstructions },
   );
+  const sessionStore = new JsonlSessionStore(projectRoot);
+  const conversation = parsed.sessionId
+    ? Conversation.fromMessages(await sessionStore.load(parsed.sessionId))
+    : new Conversation();
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  if (parsed.interactive) {
+    await new InteractiveLoop({
+      agentLoop,
+      conversation,
+      context: modelContext,
+      input: stdin,
+      output: stdout,
+      sessionStore: parsed.sessionId ? sessionStore : undefined,
+      sessionId: parsed.sessionId,
+    }).run();
+    return;
+  }
+
+  const startingLength = conversation.length;
+
+  await agentLoop.runTurn(conversation, parsed.prompt, modelContext);
+
+  if (parsed.sessionId) {
+    await sessionStore.append(
+      parsed.sessionId,
+      conversation.messagesSince(startingLength),
+    );
+  }
+
+  process.stdout.write(`${conversation.renderTranscript()}\n`);
+}
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`${message}\n`);
+  process.exit(1);
+});
+```
+
+Notice what changed from Chapter 9:
+
+```ts
+if (parsed.interactive) {
+  await new InteractiveLoop({
+    agentLoop,
+    conversation,
+    context: modelContext,
+    input: stdin,
+    output: stdout,
+    sessionStore: parsed.sessionId ? sessionStore : undefined,
+    sessionId: parsed.sessionId,
+  }).run();
+  return;
 }
 ```
 
-End the file with a direct-run guard:
+The CLI creates the loop. The loop runs the repeated prompts.
+
+The project-instruction rule from Chapter 9 is preserved:
 
 ```ts
-const isDirectRun =
-  process.argv[1] !== undefined &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-
-if (isDirectRun) {
-  main().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
-  });
-}
+const projectInstructions = await ProjectInstructions.load(projectRoot);
+const modelContext = projectInstructions.toModelContext();
 ```
 
-This lets tests import `parseArgs` and `runInteractiveLoop` without running the CLI.
+That context is passed into `InteractiveLoop`. The loop does not call
+`ProjectInstructions.load()`, and the session store still persists only
+conversation messages.
 
-## Render Only New Messages
+## Export The Terminal Boundary
 
-One-shot mode renders the whole conversation because there is only one command:
+Update `src/index.ts`:
 
 ```ts
-process.stdout.write(`${renderTranscript(result.nextConversation)}\n`);
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { ModelContext } from "./model/ModelContext";
+export {
+  OpenAIModelClient,
+  buildModelInstructions,
+  type OpenAIResponsesClient,
+} from "./model/OpenAIModelClient";
+export { ProjectInstructions } from "./project/ProjectInstructions";
+export {
+  JsonlSessionStore,
+  validateSessionId,
+} from "./session/JsonlSessionStore";
+export type { SessionStore } from "./session/SessionStore";
+export { InteractiveLoop } from "./terminal/InteractiveLoop";
+export { parseArgs, type ParsedArgs } from "./terminal/parseArgs";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export {
+  ReadFileTool,
+  resolveProjectFilePath,
+  resolveProjectRoot,
+} from "./tools/ReadFileTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
 ```
 
-Interactive mode renders only the messages created by the current prompt:
+Again, the barrel exports names. It does not become the place where logic lives.
+
+## Display Only The Current Turn
+
+One-shot mode can render the whole conversation:
 
 ```ts
-const appendedMessages = nextConversation.slice(conversation.length);
-options.output.write(`${renderTranscript(appendedMessages)}\n`);
+process.stdout.write(`${conversation.renderTranscript()}\n`);
 ```
 
-The full conversation still lives in memory. The terminal display stays focused on the latest turn.
+Interactive mode should not redraw old turns every time. If the user has already
+seen the earlier transcript, printing it again creates noise.
+
+That is why `InteractiveLoop` renders only the appended messages:
+
+```ts
+const appendedMessages = this.conversation.messagesSince(startingLength);
+
+this.output.write(
+  `${Conversation.fromMessages(appendedMessages).renderTranscript()}\n`,
+);
+```
+
+The full conversation is still preserved:
+
+```text
+Conversation object -> full in-memory state
+SessionStore append -> durable copy of new messages
+Terminal output -> only the latest turn
+```
+
+Those are three different responsibilities. They should not be collapsed into
+one "print or save everything" helper.
 
 ## The Allowlist Still Matters
 
-There are now three execution paths:
+Interactive mode does not make the model more trusted.
+
+There are still three execution paths:
 
 ```text
 manual --tool mode       -> cwd, bash, read_file
@@ -400,32 +611,53 @@ one-shot model mode      -> cwd, read_file
 interactive model mode   -> cwd, read_file
 ```
 
-Manual `bash` remains available for direct inspection:
+Manual `bash` remains available:
 
 ```bash
 bun run dev -- --tool bash "pwd"
 ```
 
-Model-driven `bash` remains unavailable. Interactive mode must not widen the model’s authority just because the process stays alive longer.
-
-## `tests/agent.test.ts`
-
-Add stream imports:
+Model-driven `bash` remains unavailable because the model registry is created
+without `BashTool`:
 
 ```ts
+const modelToolRegistry = new ToolRegistry([
+  new CurrentDirectoryTool(projectRoot),
+  new ReadFileTool(projectRoot),
+]);
+```
+
+The terminal loop reuses that registry. It does not widen the allowlist just
+because the process stays alive.
+
+## Test The Loop
+
+The tests should target the new terminal boundary directly. They should not need
+to spawn a child process to prove loop behavior.
+
+Create `tests/interactive-loop.test.ts`:
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
-```
+import { describe, expect, it } from "bun:test";
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  InteractiveLoop,
+  JsonlSessionStore,
+  ModelContext,
+  ReadFileTool,
+  ToolRegistry,
+  parseArgs,
+} from "../src";
+import { withTempProject } from "./helpers";
 
-Import the CLI helpers:
-
-```ts
-import { parseArgs, runInteractiveLoop } from "../src/cli";
-```
-
-Add an output recorder:
-
-```ts
-function createMemoryOutput(): {
+function createOutputRecorder(): {
   output: NodeJS.WritableStream;
   read(): string;
 } {
@@ -444,159 +676,198 @@ function createMemoryOutput(): {
     },
   };
 }
+
+function createAgentLoop(projectRoot: string): AgentLoop {
+  return new AgentLoop(
+    new AgentMessageFactory(),
+    new EchoModelClient(),
+    new ToolRegistry([
+      new CurrentDirectoryTool(projectRoot),
+      new ReadFileTool(projectRoot),
+    ]),
+  );
+}
 ```
 
-Add focused tests:
+Test the flags first:
 
 ```ts
-describe("chapter 10 interactive loop", () => {
+describe("parseArgs", () => {
   it("parses long and short interactive flags", () => {
-    expect(parseArgs(["--interactive", "hello"])).toMatchObject({
+    expect(parseArgs(["--interactive", "hello"])).toEqual({
+      useOpenAI: false,
       interactive: true,
       prompt: "hello",
     });
-    expect(parseArgs(["-i", "--session", "lesson-10"])).toMatchObject({
+
+    expect(parseArgs(["-i", "--session", "lesson-10"])).toEqual({
+      useOpenAI: false,
       interactive: true,
       sessionId: "lesson-10",
       prompt: "",
     });
   });
+});
+```
 
+Test multiple prompts in one process:
+
+```ts
+describe("InteractiveLoop", () => {
   it("keeps conversation in memory across prompts", async () => {
     await withTempProject(async (projectRoot) => {
-      const modelClient = createRecordingModelClient(["first", "second"]);
-      const memory = createMemoryOutput();
+      const output = createOutputRecorder();
+      const conversation = new Conversation();
 
-      const conversation = await runInteractiveLoop({
-        conversation: [],
+      await new InteractiveLoop({
+        agentLoop: createAgentLoop(projectRoot),
+        conversation,
+        context: new ModelContext(),
         input: Readable.from(["hello\nagain\n/exit\n"]),
-        output: memory.output,
-        modelClient,
-        projectRoot,
-        projectInstructions: "Use short answers.\n",
-        toolRegistry: createToolRegistry([
-          createCurrentDirectoryTool({ cwd: projectRoot }),
-          createReadFileTool({ projectRoot }),
-        ]),
-      });
+        output: output.output,
+      }).run();
 
-      expect(conversation).toEqual([
+      expect(conversation.toMessages()).toEqual([
         { role: "user", content: "hello" },
-        { role: "assistant", content: "first" },
+        { role: "assistant", content: "agent heard: hello" },
         { role: "user", content: "again" },
-        { role: "assistant", content: "second" },
+        { role: "assistant", content: "agent heard: again" },
       ]);
-      expect(memory.read()).toContain("assistant: first\n");
-      expect(memory.read()).toContain("assistant: second\n");
-    });
-  });
-
-  it("loads a session once and appends only interactive turn messages", async () => {
-    await withTempProject(async (projectRoot) => {
-      await appendSessionMessages(projectRoot, "lesson-10", [
-        { role: "user", content: "earlier" },
-        { role: "assistant", content: "remembered" },
-      ]);
-
-      const previousConversation = await loadSessionMessages(
-        projectRoot,
-        "lesson-10",
-      );
-      const modelClient = createRecordingModelClient(["fresh"]);
-
-      await runInteractiveLoop({
-        conversation: previousConversation,
-        input: Readable.from(["new prompt\n/exit\n"]),
-        output: createMemoryOutput().output,
-        modelClient,
-        projectRoot,
-        projectInstructions: "",
-        toolRegistry: createToolRegistry([
-          createCurrentDirectoryTool({ cwd: projectRoot }),
-          createReadFileTool({ projectRoot }),
-        ]),
-        sessionId: "lesson-10",
-      });
-
-      await expect(
-        readFile(getSessionFilePath(projectRoot, "lesson-10"), "utf8"),
-      ).resolves.toBe(
-        [
-          '{"role":"user","content":"earlier"}',
-          '{"role":"assistant","content":"remembered"}',
-          '{"role":"user","content":"new prompt"}',
-          '{"role":"assistant","content":"fresh"}',
-          "",
-        ].join("\n"),
-      );
-    });
-  });
-
-  it("exits cleanly on /exit and on EOF", async () => {
-    await withTempProject(async (projectRoot) => {
-      const registry = createToolRegistry([
-        createCurrentDirectoryTool({ cwd: projectRoot }),
-        createReadFileTool({ projectRoot }),
-      ]);
-
-      await expect(
-        runInteractiveLoop({
-          conversation: [],
-          input: Readable.from(["/exit\n"]),
-          output: createMemoryOutput().output,
-          modelClient: createEchoModelClient(),
-          projectRoot,
-          projectInstructions: "",
-          toolRegistry: registry,
-        }),
-      ).resolves.toEqual([]);
-
-      await expect(
-        runInteractiveLoop({
-          conversation: [],
-          input: Readable.from([]),
-          output: createMemoryOutput().output,
-          modelClient: createEchoModelClient(),
-          projectRoot,
-          projectInstructions: "",
-          toolRegistry: registry,
-        }),
-      ).resolves.toEqual([]);
-    });
-  });
-
-  it("lets the model use cwd and read_file but not bash", async () => {
-    await withTempProject(async (projectRoot) => {
-      await writeFile(path.join(projectRoot, "note.txt"), "hello file\n");
-      const registry = createToolRegistry([
-        createCurrentDirectoryTool({ cwd: projectRoot }),
-        createReadFileTool({ projectRoot }),
-      ]);
-
-      await expect(
-        runTurnWithTools(
-          [],
-          "read file note.txt",
-          createEchoModelClient(),
-          registry,
-        ),
-      ).resolves.toEqual([
-        { role: "user", content: "read file note.txt" },
-        { role: "assistant", content: "TOOL read_file: note.txt" },
-        { role: "tool", name: "read_file", content: "hello file\n" },
-        { role: "assistant", content: "saw tool read_file: hello file\n" },
-      ]);
-
-      const bashRequestingModel = createRecordingModelClient([
-        "TOOL bash: pwd",
-      ]);
-      await expect(
-        runTurnWithTools([], "try bash", bashRequestingModel, registry),
-      ).rejects.toThrow("Unknown tool: bash");
     });
   });
 });
 ```
+
+Test exit behavior:
+
+```ts
+it("exits cleanly on /exit and /quit", async () => {
+  await withTempProject(async (projectRoot) => {
+    for (const command of ["/exit\n", "/quit\n"]) {
+      const conversation = new Conversation();
+
+      await new InteractiveLoop({
+        agentLoop: createAgentLoop(projectRoot),
+        conversation,
+        context: new ModelContext(),
+        input: Readable.from([command]),
+        output: createOutputRecorder().output,
+      }).run();
+
+      expect(conversation.toMessages()).toEqual([]);
+    }
+  });
+});
+```
+
+Test session resume and append:
+
+```ts
+it("resumes a session and appends only new turn messages", async () => {
+  await withTempProject(async (projectRoot) => {
+    const sessionStore = new JsonlSessionStore(projectRoot);
+    await sessionStore.append("lesson-10", [
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "remembered" },
+    ]);
+
+    const conversation = Conversation.fromMessages(
+      await sessionStore.load("lesson-10"),
+    );
+
+    await new InteractiveLoop({
+      agentLoop: createAgentLoop(projectRoot),
+      conversation,
+      context: new ModelContext(),
+      input: Readable.from(["new prompt\n/exit\n"]),
+      output: createOutputRecorder().output,
+      sessionStore,
+      sessionId: "lesson-10",
+    }).run();
+
+    await expect(
+      readFile(
+        path.join(projectRoot, ".ty-term/sessions/lesson-10.jsonl"),
+        "utf8",
+      ),
+    ).resolves.toBe(
+      [
+        '{"role":"user","content":"earlier"}',
+        '{"role":"assistant","content":"remembered"}',
+        '{"role":"user","content":"new prompt"}',
+        '{"role":"assistant","content":"agent heard: new prompt"}',
+        "",
+      ].join("\n"),
+    );
+  });
+});
+```
+
+Test display of appended messages only:
+
+```ts
+it("prints only messages appended by the current prompt", async () => {
+  await withTempProject(async (projectRoot) => {
+    const output = createOutputRecorder();
+    const conversation = Conversation.fromMessages([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "remembered" },
+    ]);
+
+    await new InteractiveLoop({
+      agentLoop: createAgentLoop(projectRoot),
+      conversation,
+      context: new ModelContext(),
+      input: Readable.from(["fresh\n/exit\n"]),
+      output: output.output,
+    }).run();
+
+    expect(output.read()).toContain("user: fresh\n");
+    expect(output.read()).toContain("assistant: agent heard: fresh\n");
+    expect(output.read()).not.toContain("user: earlier\n");
+    expect(output.read()).not.toContain("assistant: remembered\n");
+  });
+});
+```
+
+Test that project instructions stay out of persistence:
+
+```ts
+it("does not persist project instructions as session messages", async () => {
+  await withTempProject(async (projectRoot) => {
+    await writeFile(
+      path.join(projectRoot, "AGENTS.md"),
+      "Use short answers.\n",
+    );
+    const sessionStore = new JsonlSessionStore(projectRoot);
+    const conversation = new Conversation();
+
+    await new InteractiveLoop({
+      agentLoop: createAgentLoop(projectRoot),
+      conversation,
+      context: new ModelContext({
+        projectInstructions: "Use short answers.",
+      }),
+      input: Readable.from(["hello\n/exit\n"]),
+      output: createOutputRecorder().output,
+      sessionStore,
+      sessionId: "lesson-10",
+    }).run();
+
+    const contents = await readFile(
+      path.join(projectRoot, ".ty-term/sessions/lesson-10.jsonl"),
+      "utf8",
+    );
+
+    expect(contents).toContain('"content":"hello"');
+    expect(contents).not.toContain("Use short answers.");
+  });
+});
+```
+
+That last test carries forward Chapter 9's most important rule. Project
+instructions influence model calls through `ModelContext`; they are not appended
+to the conversation or JSONL session.
 
 ## Try It
 
@@ -633,11 +904,11 @@ Try the short flag:
 bun run dev -- -i
 ```
 
-Try an allowlisted tool:
+Try a model-accessible tool:
 
 ```text
-> use the cwd tool
-user: use the cwd tool
+> where am I?
+user: where am I?
 assistant: TOOL cwd
 tool cwd: /path/to/ty-term
 assistant: saw tool cwd: /path/to/ty-term
@@ -650,18 +921,22 @@ Exit with:
 > /exit
 ```
 
-Ctrl-D exits by closing stdin. Blank lines simply reprompt in the verified implementation.
-
-Run interactive mode with a durable session:
+Run interactive mode with durable history:
 
 ```bash
 bun run dev -- --interactive --session lesson-10
 ```
 
-Then inspect:
+Then inspect the JSONL file:
 
 ```bash
 cat .ty-term/sessions/lesson-10.jsonl
+```
+
+Run a piped smoke test:
+
+```bash
+printf "hello\n/exit\n" | bun run dev -- --interactive --session smoke
 ```
 
 Run with OpenAI:
@@ -670,59 +945,48 @@ Run with OpenAI:
 OPENAI_API_KEY=... bun run dev -- --interactive --openai
 ```
 
-Run a quick piped smoke test:
-
-```bash
-printf "hello\n/exit\n" | bun run dev -- --interactive --session smoke
-```
-
 ## Verification
 
-The chapter implementation was checked in a scratch package:
+The intended checkpoint is:
 
 ```text
-bun test: passed, 7 focused tests
+bun test: passed
 bun run build: passed
-CLI smoke: passed
 ```
 
-CLI smoke checks covered:
+Focused behavior should cover:
 
-- piped interactive input with `/exit`
-- interactive `--session` JSONL appends
-- one-shot `read_file`
-- manual `--tool bash`
-
-## Reference Pointer
-
-In `pi-mono`, compare this chapter with:
-
-- `pi-mono/packages/agent/src/agent-loop.ts`
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-- `pi-mono/packages/coding-agent/src/core/bash-executor.ts`
-- `pi-mono/packages/tui/src/`
-
-The real project has a much richer loop: streaming events, cancellation, terminal UI state, command approval, background process handling, structured tool calls, and careful session orchestration.
-
-This chapter keeps one idea:
-
-> A terminal harness is a process that repeatedly accepts human input, runs the same agent turn machinery, and carries conversation state forward.
+```text
+parseArgs supports --interactive and -i
+InteractiveLoop handles multiple prompts
+InteractiveLoop exits on /exit and /quit
+InteractiveLoop resumes a session
+InteractiveLoop prints only appended messages
+JsonlSessionStore persists messages but not project instructions
+```
 
 ## What We Simplified
 
-We use plain line input. There is no full-screen TUI.
+We use plain line input from `node:readline/promises`. There is no full-screen
+TUI.
 
-We render a text transcript after each prompt. There is no streaming token display.
+We render a text transcript after each prompt. There is no streaming token
+display.
 
-We support only one tool call per turn because that is still the limit of `runTurnWithTools`.
+We still support only one tool request per turn because that is the current
+limit of `AgentLoop`.
 
-We do not add command history, editing shortcuts, colors, spinners, or cancellation.
+We do not add command history, editing shortcuts, colors, spinners, cancellation,
+or background process management.
 
-We load `AGENTS.md` once when the process starts. Restart the process to pick up changes.
+We load `AGENTS.md` once when the process starts. Restart the process to pick up
+changes.
 
-We append completed turns to JSONL. We do not persist partial turns if the process crashes in the middle of a model call.
+We append completed turns to JSONL. We do not persist partial turns if the
+process crashes in the middle of a model call.
 
-We keep `bash` out of the model registry. The interactive loop does not change the safety boundary.
+We keep `bash` out of the model registry. The interactive loop does not change
+the safety boundary.
 
 ## Book Wrap-Up Checkpoint
 
@@ -739,20 +1003,24 @@ At this point, `ty-term` has the spine of a tiny terminal coding harness:
 - a conservative model tool allowlist
 - project-root-safe file reading
 - JSONL session persistence
-- root `AGENTS.md` loading
+- root `AGENTS.md` loading as model context
 - a one-shot CLI mode
 - a tiny interactive loop
 
-The harness is still intentionally small. It is not a production coding agent. But the core boundaries are visible:
+The harness is still intentionally small. It is not a production coding agent.
+But the core boundaries are now visible:
 
 ```text
-CLI
-  -> project context
-  -> session history
-  -> model client
-  -> tool registry
-  -> turn loop
-  -> transcript/session output
+cli.ts
+  -> parseArgs
+  -> ProjectInstructions
+  -> JsonlSessionStore
+  -> ToolRegistry
+  -> ModelClient
+  -> AgentLoop
+  -> InteractiveLoop
 ```
 
-That is the teaching target of the book.
+That is the teaching target of the book: each object has a job, and the terminal
+experience is built by composing those jobs rather than jamming them into
+`index.ts` or `cli.ts`.

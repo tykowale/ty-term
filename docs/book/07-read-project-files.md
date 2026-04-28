@@ -1,532 +1,460 @@
 # Chapter 7: Read Project Files
 
-## Where We Are
-
-Chapter 6 gave `ty-term` a real agent-loop shape:
+Chapter 6 gave the harness its first model-driven tool loop:
 
 ```text
 user: use the cwd tool
 assistant: TOOL cwd
-tool cwd: /path/to/project
-assistant: saw tool cwd: /path/to/project
+tool cwd: /path/to/ty-term
+assistant: saw tool cwd: /path/to/ty-term
 ```
 
-The model can ask for an allowlisted tool, the harness can execute it, and the result goes back into the conversation.
+That flow proved the architecture:
 
-But `cwd` is mostly a heartbeat. It proves the loop works, but it does not let the model inspect the project. A coding harness cannot reason about code it cannot read.
+```text
+Conversation stores and renders messages.
+AgentMessageFactory creates user, assistant, and tool messages.
+ToolRequestParser owns the text tool protocol.
+ToolRegistry owns tool lookup and dispatch.
+AgentLoop orchestrates the turn.
+cli.ts composes dependencies and prints output.
+```
 
-This chapter adds the first useful read-only project capability:
+But `cwd` is mostly a heartbeat. It tells us the model can request a tool, but
+it does not help the model inspect the project.
+
+A coding harness needs a safe way to read files. This chapter adds that
+capability without changing the ownership rules from Chapter 6.
+
+The new model-visible request is:
 
 ```text
 TOOL read_file: package.json
 ```
 
-The tool reads UTF-8 text from inside the project root and rejects unsafe paths.
+The visible transcript becomes:
 
-## Learning Objective
-
-Learn the first filesystem safety boundary for a coding agent:
-
-```mermaid
-flowchart LR
-  Model[Assistant says TOOL read_file: path] --> Parse[Parse tool request]
-  Parse --> Registry[Find read_file in registry]
-  Registry --> Validate[Validate relative path]
-  Validate --> Root[Resolve under project root]
-  Root --> Read[Read UTF-8 file]
-  Read --> ToolMsg[Append tool message]
-  ToolMsg --> Model2[Ask model for final answer]
+```text
+user: read file package.json
+assistant: TOOL read_file: package.json
+tool read_file: {"name":"ty-term", ...}
+assistant: saw tool read_file: {"name":"ty-term", ...}
 ```
 
-The important idea is not `fs.readFile`. The important idea is this invariant:
+## The New Boundary
 
-> The model may name a project-relative file, but it may not choose an arbitrary path on the machine.
+The important concept is not `fs.readFile()`. The important concept is the
+filesystem boundary:
 
-That means:
+```text
+The model may name a project-relative file.
+The harness decides whether that path is safe.
+```
+
+That gives us these rules:
 
 - `package.json` is allowed.
 - `src/index.ts` is allowed.
+- `subdir/../README.md` is allowed if it normalizes inside the project.
 - `/etc/passwd` is rejected.
 - `../secret.txt` is rejected.
-- `subdir/../note.txt` is allowed if it normalizes inside the project.
 
-## Why File Reading Comes Next
+The model does not get to choose an arbitrary path on the machine. It can only
+ask for a file inside the project root.
 
-Chapter 5 added a manual `bash` tool. Chapter 6 deliberately kept `bash` away from the model.
+That safety check belongs near the read capability itself:
 
-That split continues here. A model-driven shell can mutate files, install packages, delete data, or hang. A model-driven file reader is still powerful, but it is read-only and much easier to reason about.
+```text
+ReadFileTool owns project-root path validation.
+ToolRegistry owns dispatch.
+AgentLoop owns orchestration.
+cli.ts chooses the project root while composing dependencies.
+```
 
-So the model registry becomes:
+If path validation lived in `cli.ts`, model-driven reads and manual reads could
+drift apart. If it lived in `AgentLoop`, the loop would start learning
+filesystem details. `ReadFileTool` is the narrowest owner.
 
-- `cwd`
-- `read_file`
+## The Capability Split
 
-The manual registry becomes:
+Chapter 5 added `BashTool`, but Chapter 6 kept it manual-only. That decision
+still stands.
 
-- `cwd`
-- `bash`
-- `read_file`
+The manual registry is for explicit human commands:
 
-The registry is the capability boundary.
+```text
+manual registry: cwd + bash + read_file
+```
 
-## Build The Slice
+The model registry is narrower:
 
-Change three files:
+```text
+model registry: cwd + read_file
+```
 
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
+The model can read project files, but it still cannot run shell commands.
 
-No new dependencies are needed. Chapter 1 already installed the full dependency set.
+That split is not a UX detail. It is the capability boundary. `ToolRegistry`
+lets the CLI compose different allowlists for different callers while every tool
+still implements the same `Tool` interface.
 
-## `src/index.ts`
+## The File Layout
 
-Replace the file with this version:
+Add one new tool class:
+
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    OpenAIModelClient.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    ReadFileTool.ts
+    Tool.ts
+    ToolRegistry.ts
+    ToolRequestParser.ts
+  cli.ts
+  index.ts
+tests/
+  agent-loop.test.ts
+  read-file-tool.test.ts
+  tool-registry.test.ts
+```
+
+`AgentLoop` does not need to learn anything about files. It already knows how
+to execute a parsed request through `ToolRegistry`.
+
+`ToolRequestParser` also stays exactly the same. The text protocol already
+supports tool input:
+
+```text
+TOOL read_file: package.json
+```
+
+So this chapter should not add a `parseToolRequest()` helper or move parsing
+back into `index.ts`.
+
+## The ReadFileTool
+
+Create `src/tools/ReadFileTool.ts`:
 
 ```ts
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import OpenAI from "openai";
+import type { Tool } from "./Tool";
 
-export type AgentRole = "user" | "assistant" | "tool";
+export class ReadFileTool implements Tool {
+  public readonly name = "read_file";
+  public readonly description =
+    "Read a UTF-8 text file from inside the project root.";
 
-export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-  name?: string;
-}
+  private readonly projectRoot: string;
 
-export type Conversation = AgentMessage[];
-
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
-}
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  execute(input?: string): Promise<string>;
-}
-
-export type ToolRegistry = ReadonlyMap<string, ToolDefinition>;
-
-export interface ToolRequest {
-  name: string;
-  input?: string;
-}
-
-export interface CommandOptions {
-  cwd?: string;
-  timeoutMs?: number;
-}
-
-export interface ReadFileOptions {
-  projectRoot?: string;
-}
-
-export function createUserMessage(content: string): AgentMessage {
-  return { role: "user", content };
-}
-
-export function createAssistantMessage(content: string): AgentMessage {
-  return { role: "assistant", content };
-}
-
-export function createToolMessage(name: string, content: string): AgentMessage {
-  return { role: "tool", name, content };
-}
-
-export function createEchoModelClient(): ModelClient {
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const latestMessage = conversation.at(-1);
-
-      if (latestMessage?.role === "tool") {
-        return `saw tool ${latestMessage.name}: ${latestMessage.content}`;
-      }
-
-      const normalizedPrompt = prompt.toLowerCase();
-
-      if (
-        normalizedPrompt.includes("use the cwd tool") ||
-        normalizedPrompt.includes("run pwd")
-      ) {
-        return "TOOL cwd";
-      }
-
-      const readFileMatch = prompt.match(/read (?:the )?file ([^\n]+)/i);
-
-      if (readFileMatch) {
-        return `TOOL read_file: ${readFileMatch[1].trim()}`;
-      }
-
-      return `agent heard: ${prompt}`;
-    },
-  };
-}
-
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-): ModelClient {
-  const client = new OpenAI();
-
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const contextText = conversation
-        .map((message) => {
-          if (message.role === "tool") {
-            return `tool ${message.name}: ${message.content}`;
-          }
-
-          return `${message.role}: ${message.content}`;
-        })
-        .join("\n");
-
-      const response = await client.responses.create({
-        model,
-        instructions: [
-          "You are connected to a tiny learning harness.",
-          "If you need the current working directory, respond exactly: TOOL cwd",
-          "If you need to read a project file, respond exactly: TOOL read_file: relative/path.txt",
-          "Only request relative project file paths.",
-          "Do not request bash commands.",
-          "After a tool result appears, answer the user in normal text.",
-        ].join("\n"),
-        input: [contextText, prompt]
-          .filter((part) => part.length > 0)
-          .join("\n"),
-      });
-
-      return response.output_text;
-    },
-  };
-}
-
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-
-  return [...conversation, userMessage, assistantMessage];
-}
-
-export async function runTurnWithTools(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-  toolRegistry: ToolRegistry,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const afterUser = [...conversation, userMessage];
-
-  const assistantContent = await modelClient.createResponse(prompt, afterUser);
-  const assistantMessage = createAssistantMessage(assistantContent);
-  const afterAssistant = [...afterUser, assistantMessage];
-
-  const toolRequest = parseToolRequest(assistantContent);
-
-  if (!toolRequest) {
-    return afterAssistant;
+  constructor(projectRoot = resolveProjectRoot()) {
+    this.projectRoot = projectRoot;
   }
 
-  const toolResult = await executeTool(
-    toolRegistry,
-    toolRequest.name,
-    toolRequest.input,
-  );
-  const toolMessage = createToolMessage(toolRequest.name, toolResult);
-  const afterTool = [...afterAssistant, toolMessage];
+  async execute(input?: string): Promise<string> {
+    const filePath = resolveProjectFilePath(this.projectRoot, input);
 
-  const finalAssistantContent = await modelClient.createResponse("", afterTool);
-  const finalAssistantMessage = createAssistantMessage(finalAssistantContent);
-
-  return [...afterTool, finalAssistantMessage];
-}
-
-export function parseToolRequest(text: string): ToolRequest | undefined {
-  const match = text.trim().match(/^TOOL ([a-zA-Z0-9_-]+)(?:\s*:\s*(.*))?$/);
-
-  if (!match) {
-    return undefined;
+    return readFile(filePath, "utf8");
   }
-
-  const [, name, input] = match;
-
-  return {
-    name,
-    input: input && input.length > 0 ? input : undefined,
-  };
-}
-
-export function renderTranscript(conversation: Conversation): string {
-  return conversation
-    .map((message) => {
-      if (message.role === "tool") {
-        return `tool ${message.name}: ${message.content}`;
-      }
-
-      return `${message.role}: ${message.content}`;
-    })
-    .join("\n");
-}
-
-export function createCurrentDirectoryTool(options?: {
-  cwd?: string;
-}): ToolDefinition {
-  const cwd = options?.cwd ?? process.cwd();
-
-  return {
-    name: "cwd",
-    description: "Return the current working directory.",
-    async execute() {
-      return cwd;
-    },
-  };
 }
 
 export function resolveProjectRoot(projectRoot?: string): string {
   return path.resolve(projectRoot ?? process.env.INIT_CWD ?? process.cwd());
 }
 
-export async function executeCommand(
-  command: string,
-  options?: CommandOptions,
-): Promise<string> {
-  const timeoutMs = options?.timeoutMs ?? 5000;
+export function resolveProjectFilePath(
+  projectRoot: string,
+  input?: string,
+): string {
+  if (!input || input.trim().length === 0) {
+    throw new Error("read_file tool requires a relative path.");
+  }
 
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+  const relativePath = input.trim();
 
-    const child = spawn(command, {
-      cwd: options?.cwd,
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+  if (path.isAbsolute(relativePath)) {
+    throw new Error("read_file path must be relative.");
+  }
 
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
+  const root = resolveProjectRoot(projectRoot);
+  const filePath = path.resolve(root, relativePath);
+  const pathFromRoot = path.relative(root, filePath);
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
+  if (
+    pathFromRoot === ".." ||
+    pathFromRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(pathFromRoot)
+  ) {
+    throw new Error("read_file path must stay inside the project root.");
+  }
 
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-
-      const exitCode = timedOut ? "timeout" : String(code ?? 0);
-
-      resolve(
-        [
-          `exit code: ${exitCode}`,
-          "stdout:",
-          stdout.trimEnd(),
-          "stderr:",
-          stderr.trimEnd(),
-        ].join("\n"),
-      );
-    });
-  });
+  return filePath;
 }
+```
 
-export function createBashTool(options?: CommandOptions): ToolDefinition {
-  return {
-    name: "bash",
-    description: "Run a bash command and return exit code, stdout, and stderr.",
-    async execute(input?: string) {
-      if (!input || input.trim().length === 0) {
-        throw new Error("bash tool requires a command.");
-      }
+This file owns three related decisions.
 
-      return executeCommand(input, options);
-    },
-  };
-}
+First, `ReadFileTool` owns the tool contract:
 
-export function createReadFileTool(options?: ReadFileOptions): ToolDefinition {
-  const projectRoot = resolveProjectRoot(options?.projectRoot);
+```ts
+public readonly name = "read_file";
+```
 
-  return {
-    name: "read_file",
-    description: "Read a UTF-8 text file from inside the project root.",
-    async execute(input?: string) {
-      if (!input || input.trim().length === 0) {
-        throw new Error("read_file tool requires a relative path.");
-      }
+The registry does not need a special branch for file reading. It sees another
+tool object with a name, a description, and an `execute()` method.
 
-      const relativePath = input.trim();
+Second, `resolveProjectRoot()` owns the default root:
 
-      if (path.isAbsolute(relativePath)) {
-        throw new Error("read_file path must be relative.");
-      }
+```ts
+path.resolve(projectRoot ?? process.env.INIT_CWD ?? process.cwd());
+```
 
-      const filePath = path.resolve(projectRoot, relativePath);
-      const pathFromRoot = path.relative(projectRoot, filePath);
+When a package manager runs a script, `INIT_CWD` points to the directory where
+the user started the command. That is usually the project root for this book.
+The constructor still accepts a root explicitly so tests can use temporary
+directories instead of the real checkout.
 
-      if (
-        pathFromRoot === ".." ||
-        pathFromRoot.startsWith(`..${path.sep}`) ||
-        path.isAbsolute(pathFromRoot)
-      ) {
-        throw new Error("read_file path must stay inside the project root.");
-      }
+Third, `resolveProjectFilePath()` owns path safety. It rejects missing input,
+absolute paths, and normalized paths that escape the root.
 
-      return readFile(filePath, "utf8");
-    },
-  };
-}
+The subtle part is this check:
 
-export function createToolRegistry(
-  tools: readonly ToolDefinition[],
-): ToolRegistry {
-  const registry = new Map<string, ToolDefinition>();
+```ts
+pathFromRoot === ".." ||
+  pathFromRoot.startsWith(`..${path.sep}`) ||
+  path.isAbsolute(pathFromRoot);
+```
 
-  for (const tool of tools) {
-    if (registry.has(tool.name)) {
-      throw new Error(`Duplicate tool name: ${tool.name}`);
+It intentionally does not use:
+
+```ts
+pathFromRoot.startsWith("..");
+```
+
+That looser check would reject a valid project file named `..example`.
+Traversal is unsafe when the normalized relative path is exactly `..`, starts
+with `../`, or becomes absolute.
+
+## The Echo Model Learns The New Request
+
+`EchoModelClient` is still a deterministic fake. It should now simulate a file
+read request when the prompt asks to read a file.
+
+`src/model/EchoModelClient.ts`:
+
+```ts
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
+
+export class EchoModelClient implements ModelClient {
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const latestMessage = messages.at(-1);
+
+    if (latestMessage?.role === "tool") {
+      return `saw tool ${latestMessage.name}: ${latestMessage.content}`;
     }
 
-    registry.set(tool.name, tool);
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === "user");
+    const prompt = lastUserMessage?.content ?? "";
+    const normalizedPrompt = prompt.toLowerCase();
+
+    if (
+      normalizedPrompt.includes("use the cwd tool") ||
+      normalizedPrompt.includes("run pwd")
+    ) {
+      return "TOOL cwd";
+    }
+
+    const readFileMatch = prompt.match(/read (?:the )?file ([^\n]+)/i);
+
+    if (readFileMatch) {
+      return `TOOL read_file: ${readFileMatch[1].trim()}`;
+    }
+
+    return `agent heard: ${prompt}`;
   }
-
-  return registry;
-}
-
-export function getTool(
-  registry: ToolRegistry,
-  name: string,
-): ToolDefinition | undefined {
-  return registry.get(name);
-}
-
-export async function executeTool(
-  registry: ToolRegistry,
-  name: string,
-  input?: string,
-): Promise<string> {
-  const tool = getTool(registry, name);
-
-  if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
-  }
-
-  return tool.execute(input);
 }
 ```
 
-## The Project Root Detail
-
-The new helper is small, but important:
-
-```ts
-export function resolveProjectRoot(projectRoot?: string): string {
-  return path.resolve(projectRoot ?? process.env.INIT_CWD ?? process.cwd());
-}
-```
-
-When you run a package script from `ty-term`, the script runs from the package root:
+This fake gives tests a stable model-driven file path:
 
 ```text
-ty-term
+read file README.md -> TOOL read_file: README.md
 ```
 
-That is also the project root for this book:
+The rest of the loop does not care that the request came from a fake model. It
+only sees assistant text, asks `ToolRequestParser` to parse it, and executes the
+result through `ToolRegistry`.
+
+## The Real Provider Gets One More Instruction
+
+`OpenAIModelClient` still hides provider-specific details behind the
+`ModelClient` interface. It only needs to update its instructions so the model
+knows the new text protocol.
+
+`src/model/OpenAIModelClient.ts`:
+
+```ts
+import OpenAI from "openai";
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
+
+export class OpenAIModelClient implements ModelClient {
+  private readonly client: OpenAI;
+
+  constructor(
+    private readonly model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    client = new OpenAI(),
+  ) {
+    this.client = client;
+  }
+
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model,
+      instructions: [
+        "You are connected to a tiny learning harness.",
+        "If you need the current working directory, respond exactly: TOOL cwd",
+        "If you need to read a project file, respond exactly: TOOL read_file: relative/path.txt",
+        "Only request relative project file paths.",
+        "Do not request bash commands.",
+        "After a tool result appears, answer the user in normal text.",
+      ].join("\n"),
+      input: messages.map((message) => {
+        if (message.role === "tool") {
+          return {
+            role: "user" as const,
+            content: `tool ${message.name}: ${message.content}`,
+          };
+        }
+
+        return {
+          role: message.role,
+          content: message.content,
+        };
+      }),
+    });
+
+    return response.output_text;
+  }
+}
+```
+
+The provider client tells the model what it may request. The actual enforcement
+still happens in the registry and the tool. Instructions are guidance;
+`ToolRegistry` and `ReadFileTool` are the guardrails.
+
+## AgentLoop Does Not Become A File Reader
+
+Chapter 6's `AgentLoop` already has the right shape:
+
+```ts
+const toolRequest = this.toolRequestParser.parse(assistantContent);
+
+if (!toolRequest) {
+  conversation.appendMessages(userMessage, assistantMessage);
+  return;
+}
+
+const toolResult = await this.toolRegistry.execute(
+  toolRequest.name,
+  toolRequest.input,
+);
+const toolMessage = this.messageFactory.createToolMessage(
+  toolRequest.name,
+  toolResult,
+);
+```
+
+There is no file-specific branch to add here.
+
+That is the payoff from Chapter 6. Once the loop depends on `ToolRegistry`
+instead of concrete tools, adding `ReadFileTool` is a composition change. The
+loop continues to own turn orchestration:
 
 ```text
-ty-term
+model response -> parser -> registry -> tool message -> final model response
 ```
 
-The package manager sets `INIT_CWD` to the directory where the user launched the command. Using `INIT_CWD ?? process.cwd()` makes the tool read from the project root in normal use while staying easy to override in tests.
+It does not own file paths.
 
-## The Path Boundary
+## The Barrel File Exports The Tool
 
-The read tool rejects missing input:
-
-```ts
-if (!input || input.trim().length === 0) {
-  throw new Error("read_file tool requires a relative path.");
-}
-```
-
-It rejects absolute paths:
+`src/index.ts` remains a public import surface:
 
 ```ts
-if (path.isAbsolute(relativePath)) {
-  throw new Error("read_file path must be relative.");
-}
-```
-
-Then it resolves the file under the project root and checks the normalized relative path:
-
-```ts
-const filePath = path.resolve(projectRoot, relativePath);
-const pathFromRoot = path.relative(projectRoot, filePath);
-
-if (
-  pathFromRoot === ".." ||
-  pathFromRoot.startsWith(`..${path.sep}`) ||
-  path.isAbsolute(pathFromRoot)
-) {
-  throw new Error("read_file path must stay inside the project root.");
-}
-```
-
-The check intentionally does not use `pathFromRoot.startsWith("..")`. That would reject a valid file like `..example` inside the project. The path is unsafe only when the normalized relative path is exactly `..`, starts with `../`, or becomes absolute.
-
-## `src/cli.ts`
-
-Replace the file with this version:
-
-```ts
-#!/usr/bin/env node
-import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createReadFileTool,
-  createToolRegistry,
-  executeTool,
-  renderTranscript,
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export {
+  ReadFileTool,
+  resolveProjectFilePath,
   resolveProjectRoot,
-  runTurnWithTools,
+} from "./tools/ReadFileTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+```
+
+There is still no `createReadFileTool()`, no `parseToolRequest()`, and no
+`runTurnWithTools()` in this file. Those would pull behavior back into the
+barrel.
+
+## The CLI Composes Two Registries
+
+The CLI chooses the project root because it is the process entrypoint. It knows
+where the command was launched, and it decides which dependencies to compose.
+
+It still does not validate file paths itself.
+
+`src/cli.ts`:
+
+```ts
+#!/usr/bin/env bun
+
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  OpenAIModelClient,
+  ReadFileTool,
+  ToolRegistry,
+  resolveProjectRoot,
 } from "./index";
 
 interface ParsedArgs {
-  useOpenAI: boolean;
-  toolName?: string;
-  toolInput?: string;
-  prompt: string;
+  readonly useOpenAI: boolean;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -560,13 +488,13 @@ async function main(): Promise<void> {
   const projectRoot = resolveProjectRoot();
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: projectRoot }),
-      createBashTool({ cwd: projectRoot }),
-      createReadFileTool({ projectRoot }),
+    const manualToolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(projectRoot),
+      new BashTool({ cwd: projectRoot }),
+      new ReadFileTool(projectRoot),
     ]);
-    const result = await executeTool(
-      registry,
+
+    const result = await manualToolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -577,6 +505,9 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error("       bun run dev -- --tool cwd");
+    console.error('       bun run dev -- --tool bash "pwd"');
+    console.error("       bun run dev -- --tool read_file package.json");
     process.exit(1);
   }
 
@@ -585,22 +516,24 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const conversation: Conversation = [];
-  const modelToolRegistry = createToolRegistry([
-    createCurrentDirectoryTool({ cwd: projectRoot }),
-    createReadFileTool({ projectRoot }),
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const modelToolRegistry = new ToolRegistry([
+    new CurrentDirectoryTool(projectRoot),
+    new ReadFileTool(projectRoot),
   ]);
-  const nextConversation = await runTurnWithTools(
-    conversation,
-    parsed.prompt,
+  const agentLoop = new AgentLoop(
+    messageFactory,
     modelClient,
     modelToolRegistry,
   );
+  const conversation = new Conversation();
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  await agentLoop.runTurn(conversation, parsed.prompt);
+
+  console.log(conversation.renderTranscript());
 }
 
 main().catch((error: unknown) => {
@@ -610,58 +543,51 @@ main().catch((error: unknown) => {
 });
 ```
 
-The CLI now makes the capability split explicit:
+Read the composition by capability:
 
 ```ts
-const registry = createToolRegistry([
-  createCurrentDirectoryTool({ cwd: projectRoot }),
-  createBashTool({ cwd: projectRoot }),
-  createReadFileTool({ projectRoot }),
+const manualToolRegistry = new ToolRegistry([
+  new CurrentDirectoryTool(projectRoot),
+  new BashTool({ cwd: projectRoot }),
+  new ReadFileTool(projectRoot),
 ]);
 ```
 
-That manual registry is used only when the human explicitly runs `--tool`.
-
-The model registry stays narrower:
+Manual mode can run bash because a human explicitly requested a tool.
 
 ```ts
-const modelToolRegistry = createToolRegistry([
-  createCurrentDirectoryTool({ cwd: projectRoot }),
-  createReadFileTool({ projectRoot }),
+const modelToolRegistry = new ToolRegistry([
+  new CurrentDirectoryTool(projectRoot),
+  new ReadFileTool(projectRoot),
 ]);
 ```
 
-The model can read files, but it still cannot run shell commands.
+Model mode can inspect the project, but it still cannot execute shell commands.
 
-## `tests/agent.test.ts`
+The CLI's job is composition and process I/O:
 
-Replace the file with this version:
+- parse `process.argv`
+- choose `projectRoot`
+- instantiate tools and model clients
+- call `AgentLoop`
+- print output
+
+It does not parse `TOOL read_file`, append tool messages, or inspect path
+traversal.
+
+## Tests For ReadFileTool
+
+Start with the new boundary itself. These tests use temporary project
+directories so they do not depend on the actual repository checkout.
+
+`tests/read-file-tool.test.ts`:
 
 ```ts
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
-import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createReadFileTool,
-  createToolMessage,
-  createToolRegistry,
-  executeCommand,
-  executeTool,
-  getTool,
-  parseToolRequest,
-  renderTranscript,
-  runTurn,
-  runTurnWithTools,
-} from "../src/index";
-
-function nodeCommand(script: string): string {
-  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
-}
+import { ReadFileTool, resolveProjectFilePath } from "../src/index";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,
@@ -675,38 +601,175 @@ async function withTempProject<T>(
   }
 }
 
-describe("agent turn", () => {
-  it("keeps the normal prompt contract stable", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
+describe("ReadFileTool", () => {
+  it("reads UTF-8 text from a relative path inside the project root", async () => {
+    await withTempProject(async (projectRoot) => {
+      await writeFile(path.join(projectRoot, "note.txt"), "hello\n", "utf8");
+      const readFileTool = new ReadFileTool(projectRoot);
 
-    expect(renderTranscript(conversation)).toBe(
+      await expect(readFileTool.execute("note.txt")).resolves.toBe("hello\n");
+    });
+  });
+
+  it("reports missing files from the filesystem", async () => {
+    await withTempProject(async (projectRoot) => {
+      const readFileTool = new ReadFileTool(projectRoot);
+
+      await expect(readFileTool.execute("missing.txt")).rejects.toThrow();
+    });
+  });
+
+  it("rejects empty input", async () => {
+    const readFileTool = new ReadFileTool(process.cwd());
+
+    await expect(readFileTool.execute()).rejects.toThrow(
+      "read_file tool requires a relative path.",
+    );
+  });
+
+  it("rejects absolute paths", async () => {
+    const readFileTool = new ReadFileTool(process.cwd());
+
+    await expect(
+      readFileTool.execute(path.resolve("package.json")),
+    ).rejects.toThrow("read_file path must be relative.");
+  });
+
+  it("rejects traversal outside the project root", async () => {
+    await withTempProject(async (projectRoot) => {
+      const readFileTool = new ReadFileTool(projectRoot);
+
+      await expect(readFileTool.execute("../secret.txt")).rejects.toThrow(
+        "read_file path must stay inside the project root.",
+      );
+    });
+  });
+
+  it("allows normalized relative paths that stay inside the project root", async () => {
+    await withTempProject(async (projectRoot) => {
+      await mkdir(path.join(projectRoot, "subdir"));
+      await writeFile(path.join(projectRoot, "note.txt"), "inside\n", "utf8");
+      const readFileTool = new ReadFileTool(projectRoot);
+
+      await expect(readFileTool.execute("subdir/../note.txt")).resolves.toBe(
+        "inside\n",
+      );
+    });
+  });
+
+  it("allows dot-prefixed filenames inside the project root", async () => {
+    await withTempProject(async (projectRoot) => {
+      await writeFile(path.join(projectRoot, "..example"), "hidden\n", "utf8");
+
+      expect(resolveProjectFilePath(projectRoot, "..example")).toBe(
+        path.join(projectRoot, "..example"),
+      );
+    });
+  });
+});
+```
+
+The missing-file test deliberately does not assert the exact Node error text.
+Different platforms can phrase filesystem errors differently. The important
+contract is that a missing file fails instead of silently inventing content.
+
+## Tests For The Model-Driven Path
+
+Now extend the Chapter 6 `AgentLoop` tests with a file-read case.
+
+`tests/agent-loop.test.ts`:
+
+```ts
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "bun:test";
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  ReadFileTool,
+  ToolRegistry,
+  type AgentMessage,
+  type ModelClient,
+} from "../src/index";
+
+async function withTempProject<T>(
+  callback: (projectRoot: string) => Promise<T>,
+): Promise<T> {
+  const projectRoot = await mkdtemp(path.join(tmpdir(), "ty-term-agent-loop-"));
+
+  try {
+    return await callback(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+}
+
+class RecordingModelClient implements ModelClient {
+  public receivedMessages: AgentMessage[] = [];
+
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    this.receivedMessages = messages;
+    return "model response";
+  }
+}
+
+class UnknownToolModelClient implements ModelClient {
+  async createResponse(): Promise<string> {
+    return "TOOL missing";
+  }
+}
+
+describe("AgentLoop", () => {
+  it("keeps the normal prompt path stable", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
+      new ToolRegistry([new CurrentDirectoryTool("/learn/harness")]),
+    );
+
+    await agentLoop.runTurn(conversation, "hello");
+
+    expect(conversation.renderTranscript()).toBe(
       "user: hello\nassistant: agent heard: hello",
     );
   });
 
-  it("does not mutate the previous conversation", async () => {
-    const original: Conversation = [{ role: "user", content: "earlier" }];
-
-    await runTurn(original, "next", createEchoModelClient());
-
-    expect(original).toEqual([{ role: "user", content: "earlier" }]);
-  });
-});
-
-describe("tool-aware agent turn", () => {
-  it("runs one requested cwd tool and adds the final assistant response", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
+  it("passes prior conversation plus the new user message to the model", async () => {
+    const modelClient = new RecordingModelClient();
+    const conversation = new Conversation([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
     ]);
+    const agentLoop = new AgentLoop(new AgentMessageFactory(), modelClient);
 
-    const conversation = await runTurnWithTools(
-      [],
-      "use the cwd tool",
-      createEchoModelClient(),
+    await agentLoop.runTurn(conversation, "next");
+
+    expect(modelClient.receivedMessages).toEqual([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
+      { role: "user", content: "next" },
+    ]);
+  });
+
+  it("runs one requested cwd tool and appends the final assistant response", async () => {
+    const conversation = new Conversation();
+    const registry = new ToolRegistry([
+      new CurrentDirectoryTool("/learn/harness"),
+    ]);
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
       registry,
     );
 
-    expect(conversation).toEqual([
+    await agentLoop.runTurn(conversation, "use the cwd tool");
+
+    expect(conversation.getMessages()).toEqual([
       { role: "user", content: "use the cwd tool" },
       { role: "assistant", content: "TOOL cwd" },
       { role: "tool", name: "cwd", content: "/learn/harness" },
@@ -714,25 +777,25 @@ describe("tool-aware agent turn", () => {
     ]);
   });
 
-  it("runs one requested read_file tool and adds the final assistant response", async () => {
+  it("runs one requested read_file tool and appends the final assistant response", async () => {
     await withTempProject(async (projectRoot) => {
       await writeFile(
         path.join(projectRoot, "README.md"),
         "chapter 7\n",
         "utf8",
       );
-      const registry = createToolRegistry([
-        createReadFileTool({ projectRoot }),
-      ]);
 
-      const conversation = await runTurnWithTools(
-        [],
-        "read file README.md",
-        createEchoModelClient(),
+      const conversation = new Conversation();
+      const registry = new ToolRegistry([new ReadFileTool(projectRoot)]);
+      const agentLoop = new AgentLoop(
+        new AgentMessageFactory(),
+        new EchoModelClient(),
         registry,
       );
 
-      expect(conversation).toEqual([
+      await agentLoop.runTurn(conversation, "read file README.md");
+
+      expect(conversation.getMessages()).toEqual([
         { role: "user", content: "read file README.md" },
         { role: "assistant", content: "TOOL read_file: README.md" },
         { role: "tool", name: "read_file", content: "chapter 7\n" },
@@ -744,198 +807,86 @@ describe("tool-aware agent turn", () => {
     });
   });
 
-  it("does not run a tool when the assistant response is normal text", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
-
-    const conversation = await runTurnWithTools(
-      [],
-      "hello",
-      createEchoModelClient(),
-      registry,
+  it("uses the registry as the model tool allowlist", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new UnknownToolModelClient(),
+      new ToolRegistry([]),
     );
 
-    expect(renderTranscript(conversation)).toBe(
-      "user: hello\nassistant: agent heard: hello",
-    );
-  });
-
-  it("uses the registry as the allowlist", async () => {
-    await expect(
-      runTurnWithTools(
-        [],
-        "use the cwd tool",
-        createEchoModelClient(),
-        createToolRegistry([]),
-      ),
-    ).rejects.toThrow("Unknown tool: cwd");
-  });
-});
-
-describe("tool request parsing", () => {
-  it("parses a tool request without input", () => {
-    expect(parseToolRequest("TOOL cwd")).toEqual({ name: "cwd" });
-  });
-
-  it("parses a tool request with input", () => {
-    expect(parseToolRequest("TOOL read_file: package.json")).toEqual({
-      name: "read_file",
-      input: "package.json",
-    });
-  });
-
-  it("ignores normal assistant text", () => {
-    expect(parseToolRequest("agent heard: hello")).toBeUndefined();
-  });
-});
-
-describe("transcript rendering", () => {
-  it("renders tool messages with the tool name", () => {
-    expect(renderTranscript([createToolMessage("cwd", "/learn/harness")])).toBe(
-      "tool cwd: /learn/harness",
-    );
-  });
-});
-
-describe("tool registry", () => {
-  it("stores tools by name", () => {
-    const cwdTool = createCurrentDirectoryTool({ cwd: "/learn/harness" });
-    const registry = createToolRegistry([cwdTool]);
-
-    expect(getTool(registry, "cwd")).toBe(cwdTool);
-  });
-
-  it("rejects duplicate tool names", () => {
-    expect(() =>
-      createToolRegistry([
-        createCurrentDirectoryTool({ cwd: "/one" }),
-        createCurrentDirectoryTool({ cwd: "/two" }),
-      ]),
-    ).toThrow("Duplicate tool name: cwd");
-  });
-
-  it("executes a named tool", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
-
-    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
-  });
-
-  it("passes input to a named tool", async () => {
-    const registry = createToolRegistry([createBashTool({ timeoutMs: 1000 })]);
-
-    await expect(
-      executeTool(registry, "bash", nodeCommand("process.stdout.write('ok')")),
-    ).resolves.toContain("stdout:\nok");
-  });
-
-  it("reports unknown tools", async () => {
-    const registry = createToolRegistry([]);
-
-    await expect(executeTool(registry, "missing")).rejects.toThrow(
+    await expect(agentLoop.runTurn(conversation, "try a tool")).rejects.toThrow(
       "Unknown tool: missing",
-    );
-  });
-});
-
-describe("read_file tool", () => {
-  it("reads UTF-8 text from a relative path inside the project root", async () => {
-    await withTempProject(async (projectRoot) => {
-      await writeFile(path.join(projectRoot, "note.txt"), "hello\n", "utf8");
-      const readFileTool = createReadFileTool({ projectRoot });
-
-      await expect(readFileTool.execute("note.txt")).resolves.toBe("hello\n");
-    });
-  });
-
-  it("rejects empty input", async () => {
-    const readFileTool = createReadFileTool({ projectRoot: process.cwd() });
-
-    await expect(readFileTool.execute()).rejects.toThrow(
-      "read_file tool requires a relative path.",
-    );
-  });
-
-  it("rejects absolute paths", async () => {
-    const readFileTool = createReadFileTool({ projectRoot: process.cwd() });
-
-    await expect(
-      readFileTool.execute(path.resolve("package.json")),
-    ).rejects.toThrow("read_file path must be relative.");
-  });
-
-  it("rejects traversal outside the project root", async () => {
-    await withTempProject(async (projectRoot) => {
-      const readFileTool = createReadFileTool({ projectRoot });
-
-      await expect(readFileTool.execute("../secret.txt")).rejects.toThrow(
-        "read_file path must stay inside the project root.",
-      );
-    });
-  });
-
-  it("allows normalized relative paths that stay inside the project root", async () => {
-    await withTempProject(async (projectRoot) => {
-      await writeFile(path.join(projectRoot, "note.txt"), "inside\n", "utf8");
-      const readFileTool = createReadFileTool({ projectRoot });
-
-      await expect(readFileTool.execute("subdir/../note.txt")).resolves.toBe(
-        "inside\n",
-      );
-    });
-  });
-
-  it("allows dot-prefixed filenames inside the project root", async () => {
-    await withTempProject(async (projectRoot) => {
-      await writeFile(path.join(projectRoot, "..example"), "hidden\n", "utf8");
-      const readFileTool = createReadFileTool({ projectRoot });
-
-      await expect(readFileTool.execute("..example")).resolves.toBe("hidden\n");
-    });
-  });
-});
-
-describe("bash command execution", () => {
-  it("captures stdout with an exit code", async () => {
-    const result = await executeCommand(
-      nodeCommand("process.stdout.write('ok')"),
-      { timeoutMs: 1000 },
-    );
-
-    expect(result).toContain("exit code: 0");
-    expect(result).toContain("stdout:\nok");
-    expect(result).toContain("stderr:");
-  });
-
-  it("captures stderr and nonzero exit codes", async () => {
-    const result = await executeCommand(
-      nodeCommand("process.stderr.write('bad'); process.exit(7)"),
-      { timeoutMs: 1000 },
-    );
-
-    expect(result).toContain("exit code: 7");
-    expect(result).toContain("stderr:\nbad");
-  });
-
-  it("rejects empty bash tool input", async () => {
-    const bashTool = createBashTool();
-
-    await expect(bashTool.execute()).rejects.toThrow(
-      "bash tool requires a command.",
     );
   });
 });
 ```
 
-## Run It
+The new test proves the whole path:
 
-From the `ty-term` directory:
+```text
+EchoModelClient -> ToolRequestParser -> ToolRegistry -> ReadFileTool -> Conversation
+```
+
+It does not add file-reading logic to the loop. The loop only knows that the
+registry returned text for a requested tool.
+
+## Registry Tests Stay General
+
+`ToolRegistry` does not need a special `read_file` test beyond dispatching a
+tool by name. If your Chapter 4 tests already cover duplicate names, lookup,
+and `execute()`, they still apply.
+
+It is useful to add one integration-style dispatch assertion for the new tool:
+
+```ts
+it("dispatches read_file through the registry", async () => {
+  await withTempProject(async (projectRoot) => {
+    await writeFile(path.join(projectRoot, "note.txt"), "hello\n", "utf8");
+    const registry = new ToolRegistry([new ReadFileTool(projectRoot)]);
+
+    await expect(registry.execute("read_file", "note.txt")).resolves.toBe(
+      "hello\n",
+    );
+  });
+});
+```
+
+That test belongs with registry or read-file tests depending on how your test
+files are organized. The behavior is the same: the caller asks the registry for
+`read_file`, not the concrete tool directly.
+
+## Try It
+
+Install dependencies if needed:
+
+```bash
+bun install
+```
+
+Build:
 
 ```bash
 bun run build
+```
+
+Run tests:
+
+```bash
 bun test
+```
+
+Run the normal prompt path:
+
+```bash
+bun run dev -- "hello"
+```
+
+Expected output:
+
+```text
+user: hello
+assistant: agent heard: hello
 ```
 
 Run the model-driven read path:
@@ -966,7 +917,7 @@ tool read_file:
 {"name":"ty-term", ...}
 ```
 
-Try a traversal:
+Try traversal:
 
 ```bash
 bun run dev -- --tool read_file ../package.json
@@ -978,50 +929,47 @@ Expected error:
 read_file path must stay inside the project root.
 ```
 
-## Verification
+Manual bash still works:
 
-The chapter implementation was checked in a scratch `ty-term` package:
-
-```text
-bun run build: passed
-bun test: passed
-24 tests passed
+```bash
+bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
 ```
 
-CLI smoke checks also passed for:
-
-- model-driven `read_file`
-- manual `--tool read_file`
-- traversal rejection with `../package.json`
-
-## Reference Pointer
-
-In `pi-mono`, compare this chapter with:
-
-- `pi-mono/packages/coding-agent/src/core/tools/read.ts`
-- `pi-mono/packages/coding-agent/src/core/tools/path-utils.ts`
-- `pi-mono/packages/agent/src/agent-loop.ts`
-
-The production read tool has richer behavior: line ranges, truncation, binary handling, image handling, abort signals, provider-native tool schemas, and better display output. This chapter keeps only the safety invariant and the model loop.
+But the model still cannot request bash because `BashTool` is not in the model
+registry.
 
 ## What We Simplified
 
-We read whole UTF-8 files only. There is no line range support, no file-size guard, no binary detection, no ignore-file integration, and no provider-native tool schema.
+This chapter reads whole UTF-8 files only. There is no line range support, no
+file-size guard, no binary detection, no ignore-file integration, no symlink
+policy, and no provider-native tool schema.
 
-Those are real production concerns, but they are separate from the core lesson:
+Those are real production concerns, but they are separate from this chapter's
+lesson:
 
-> The harness owns filesystem resolution. The model only supplies a relative project path.
+```text
+The harness owns filesystem resolution.
+The model only supplies a relative project path.
+```
+
+The architecture can absorb those concerns later because the boundary is now in
+one place: `ReadFileTool`.
 
 ## Checkpoint
 
 You now have:
 
-- a model-driven `read_file` tool
-- UTF-8 project file reads
-- absolute path rejection
+- `ReadFileTool` as a `Tool` implementation
+- project-root-aware UTF-8 file reads
+- missing-input rejection
+- absolute-path rejection
 - traversal rejection
-- `INIT_CWD`-aware project root resolution
+- normalized inside-root path support
 - separate manual and model tool registries
-- tests around the filesystem boundary
+- a model-driven file-read path through the existing `AgentLoop`
 
-The harness can now inspect project files. Next, it needs memory across runs, so Chapter 8 persists sessions as JSONL.
+The harness can now inspect project files during a conversation. The next
+problem is memory: every run still starts from an empty `Conversation`. Chapter
+8 fixes that by introducing `SessionStore` and `JsonlSessionStore` so messages
+can survive across CLI runs without teaching persistence to `AgentLoop` or
+`cli.ts`.

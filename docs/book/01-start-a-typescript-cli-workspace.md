@@ -14,6 +14,8 @@ ty-term/
 
 The goal here is to setup everything and make sure it works. We'll build a CLI that accepts one command-line prompt and prints a fixed response. Prove the package wiring, the Bun bundle, the test runner, and the CLI entry point.
 
+This chapter is deliberately not where we design the agent. The fake response function gives the terminal something to call, but it is scaffolding. Starting in Chapter 2, the domain model moves into named objects such as `AgentMessageFactory` and `Conversation` so the CLI does not become the place where agent behavior piles up.
+
 ## Learning Objective
 
 Set up the smallest Bun-driven TypeScript CLI that can be bundled, tested, and run on repeat.
@@ -129,7 +131,9 @@ export function respondToPrompt(prompt: string): string {
 }
 ```
 
-This is a placeholder on purpose. Later chapters will replace it with model calls, parsing, and tool use. For now, `respondToPrompt` gives us one stable function to test and call from the terminal.
+This is a placeholder on purpose. It is not the first draft of our agent architecture; it is a temporary seam that lets us test the package before the real domain objects exist.
+
+For now, `respondToPrompt` gives us one stable function to test and call from the terminal. In Chapter 2, this function goes away. Message construction will belong to `AgentMessageFactory`, and ordered conversation state will belong to `Conversation`.
 
 The empty-input branch adds one real edge case without turning this chapter into validation infrastructure.
 
@@ -145,6 +149,8 @@ console.log(response);
 ```
 
 The CLI is only an adapter: it reads arguments, joins them into one prompt, calls `respondToPrompt`, and prints the result.
+
+That boundary matters more than the tiny code suggests. `cli.ts` is allowed to know about `process.argv` and `console.log()` because those are process I/O concerns. It should not become the home for message history, model calls, tool execution, or session persistence. As the book grows, those responsibilities move into classes with names that describe what they own.
 
 Notice the import path:
 
@@ -249,7 +255,7 @@ ty-term/package.json
 ty-term/tsconfig.json
 ```
 
-The source files split behavior from the terminal adapter:
+The source files split temporary behavior from the terminal adapter:
 
 ```text
 src/index.ts
@@ -267,7 +273,9 @@ terminal args
 
 Bun's bundler turns that source graph into `dist/cli.js`. The invariant is simple: `respondToPrompt` takes a string and returns a string. It does not read the terminal, print, call a model, or touch the filesystem.
 
-The CLI owns side effects. The function owns behavior. That separation is the pattern this book keeps using.
+The CLI owns process side effects. The placeholder function owns the fake behavior for this one chapter.
+
+The separation is the pattern this book keeps using, but the owner will change. A single standalone function is fine for proving the workspace. It would be a poor home for a real agent. Once we need messages, history, providers, tools, and sessions, each concept gets an object boundary instead of being jammed into `index.ts` or `cli.ts`.
 
 ## Reference Note
 
@@ -276,6 +284,8 @@ Compare this wrapper with the real agent loop and session code in the reference 
 ## Simplifications
 
 The response is static and model-free.
+
+`respondToPrompt` is intentionally disposable. It exists so this chapter has a runnable checkpoint before Chapter 2 introduces the real conversation objects.
 
 The CLI takes one prompt from command-line arguments. It is not interactive.
 
@@ -287,6 +297,6 @@ ESLint and Prettier are configured in the repo, but this chapter leaves them out
 
 Chapter 1 leaves us with a working shell around fake behavior.
 
-Chapter 2 replaces the single prompt string with a conversation representation. The next useful artifact is likely an `AgentMessage` type with `user` and `assistant` roles.
+Chapter 2 replaces the single prompt string with a conversation representation. The next useful artifacts are `AgentMessageFactory`, which creates user and assistant messages, and `Conversation`, which owns ordered message history and transcript rendering.
 
 The next check should show the program building a small conversation and printing something inspectable, still without a model call.

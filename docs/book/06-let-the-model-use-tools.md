@@ -1,486 +1,578 @@
 # Chapter 6: Let the Model Use Tools
 
-## Where We Are
+Chapter 5 gave the harness two tool paths:
 
-Chapter 5 gave the harness two ways to run tools:
+- `cwd`, a safe tool that returns the current working directory
+- `bash`, a manual tool that runs a shell command
 
-- `cwd`, which returns the current working directory
-- `bash`, which runs a manually requested shell command
-
-Both tools are still outside the model loop. The human has to type:
+Both tools still sat outside the model loop. A human could type:
 
 ```bash
 bun run dev -- --tool cwd
 ```
 
-This chapter lets the model request one safe tool from inside a normal turn.
-
-The important constraint is that the model does not get the `bash` tool yet. A shell tool can change the machine, so it stays behind the manual `--tool bash` path from Chapter 5. The model only receives `cwd`, which is useful, deterministic, and easy to reason about.
-
-## Learning Objective
-
-Learn the smallest complete tool loop:
-
-```mermaid
-flowchart LR
-  User[User prompt] --> Model1[Model response]
-  Model1 --> Parse{Tool request?}
-  Parse -- no --> Done[Return conversation]
-  Parse -- yes --> Tool[Run allowlisted tool]
-  Tool --> Model2[Send tool result back]
-  Model2 --> Done
-```
-
-By the end, this command:
+or:
 
 ```bash
-bun run dev -- "use the cwd tool"
+bun run dev -- --tool bash "pwd"
 ```
 
-prints a transcript like:
+but a normal prompt still flowed through one simple model turn:
 
 ```text
+user: hello
+assistant: agent heard: hello
+```
+
+This chapter connects the model loop to the tool boundary. The model can now ask
+for one allowlisted tool, the harness can execute that tool through
+`ToolRegistry`, and the tool result becomes part of the conversation before the
+model writes its final answer.
+
+The architectural rule is the important part:
+
+```text
+Conversation stores and renders messages.
+AgentLoop orchestrates model/tool turns.
+ToolRequestParser owns the text tool protocol.
+ToolRegistry dispatches tool execution.
+BashTool still owns command execution.
+cli.ts composes dependencies and prints results.
+```
+
+The visible behavior is:
+
+```text
+$ bun run dev -- "use the cwd tool"
 user: use the cwd tool
 assistant: TOOL cwd
 tool cwd: /path/to/ty-term
 assistant: saw tool cwd: /path/to/ty-term
 ```
 
-## The Deliberate Simplification
+## Why The Loop Moves Here
 
-Real coding agents usually use structured tool calls from the provider API. `pi-mono` routes those through a richer agent loop and executor boundary.
+Chapter 3 introduced `AgentLoop` because `Conversation` should not know how to
+call a model. Chapter 4 introduced `ToolRegistry` but deliberately kept it out
+of `AgentLoop` because the model did not know how to request a tool yet.
+Chapter 5 added `BashTool` but kept it manual because shell commands are too
+powerful to hand to a model in the first tool chapter.
 
-This book uses a plain text protocol first:
+Now the missing pieces line up:
+
+```text
+model response -> parse request -> registry executes tool -> tool result message
+```
+
+That sequence is orchestration. It belongs in `AgentLoop`.
+
+It does not belong in `Conversation`. If `Conversation` executed tools, message
+history would know about model behavior, tool allowlists, parser syntax, and
+execution errors. That would turn the storage object into the new god object.
+
+It also does not belong in `cli.ts`. If the CLI parsed model text and executed
+tools, the command-line entrypoint would become the agent. Later chapters need
+interactive mode, sessions, project instructions, and file tools. Those should
+reuse the same `AgentLoop`, not duplicate hidden branches in the CLI.
+
+## The Small Tool Protocol
+
+Real model providers support structured tool calls. We will get there later.
+For this chapter, the model uses a plain text protocol:
 
 ```text
 TOOL cwd
 TOOL bash: pwd
 ```
 
-That is not the final design for a production harness, but it makes the control flow visible. The model asks for a tool, the harness parses the request, the registry enforces the allowlist, and the result becomes a `tool` message.
+The syntax is intentionally inspectable. A reader can see the exact assistant
+message that requested a tool:
 
-## Build The Slice
+```text
+assistant: TOOL cwd
+```
 
-Change three files:
+But even a small text protocol needs an owner. We should not scatter this
+regular expression through `AgentLoop`, `cli.ts`, and tests. The parser gets its
+own class:
 
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
+```text
+src/tools/ToolRequestParser.ts
+```
 
-No new dependencies are needed. Chapter 1 already installed everything used here.
+The parser does not execute tools. It only translates assistant text into a
+small request object.
 
-## `src/index.ts`
+## The File Layout
 
-Replace the file with this version:
+The book's OOP spine now looks like this:
+
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    OpenAIModelClient.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    Tool.ts
+    ToolRegistry.ts
+    ToolRequestParser.ts
+  cli.ts
+  index.ts
+tests/
+  agent-loop.test.ts
+  bash-tool.test.ts
+  tool-registry.test.ts
+  tool-request-parser.test.ts
+```
+
+The only new source file is `ToolRequestParser.ts`. Existing files evolve to
+carry tool messages through the loop.
+
+## Tool Messages
+
+Before the loop can record a tool result, the message type needs one more role.
+
+`src/agent/AgentMessage.ts`:
 
 ```ts
-import { spawn } from "node:child_process";
-import OpenAI from "openai";
-
 export type AgentRole = "user" | "assistant" | "tool";
 
 export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-  name?: string;
+  readonly role: AgentRole;
+  readonly content: string;
+  readonly name?: string;
 }
+```
 
-export type Conversation = AgentMessage[];
+The `name` field is only meaningful for tool messages:
 
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
+```ts
+{ role: "tool", name: "cwd", content: "/path/to/ty-term" }
+```
+
+A stricter implementation could use a discriminated union so TypeScript enforces
+that `name` exists only when `role` is `"tool"`. That is a reasonable future
+refactor. Here, the optional field keeps the chapter focused on the loop.
+
+## The Message Factory Grows With The Role
+
+Chapter 2 introduced `AgentMessageFactory` so message construction would not
+become a pile of standalone helpers. This chapter adds a method to that object.
+
+`src/agent/AgentMessageFactory.ts`:
+
+```ts
+import type { AgentMessage } from "./AgentMessage";
+
+export class AgentMessageFactory {
+  createUserMessage(content: string): AgentMessage {
+    return { role: "user", content };
+  }
+
+  createAssistantMessage(content: string): AgentMessage {
+    return { role: "assistant", content };
+  }
+
+  createToolMessage(name: string, content: string): AgentMessage {
+    return { role: "tool", name, content };
+  }
 }
+```
 
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  execute(input?: string): Promise<string>;
+This keeps the ownership rule intact:
+
+```text
+AgentMessageFactory owns construction of agent messages.
+Conversation owns storage of agent messages.
+AgentLoop decides when each message is created.
+```
+
+## Conversation Still Stores And Renders
+
+`Conversation` does not execute tools, but it does need to render tool messages
+clearly.
+
+`src/agent/Conversation.ts`:
+
+```ts
+import type { AgentMessage } from "./AgentMessage";
+
+export class Conversation {
+  private readonly messages: AgentMessage[];
+
+  constructor(messages: AgentMessage[] = []) {
+    this.messages = messages.map((message) => ({ ...message }));
+  }
+
+  appendMessages(...messages: AgentMessage[]): void {
+    this.messages.push(...messages.map((message) => ({ ...message })));
+  }
+
+  getMessages(): AgentMessage[] {
+    return this.messages.map((message) => ({ ...message }));
+  }
+
+  renderTranscript(): string {
+    return this.messages
+      .map((message) => {
+        if (message.role === "tool") {
+          return `tool ${message.name}: ${message.content}`;
+        }
+
+        return `${message.role}: ${message.content}`;
+      })
+      .join("\n");
+  }
 }
+```
 
-export type ToolRegistry = ReadonlyMap<string, ToolDefinition>;
+The new branch is presentation logic, not orchestration. Rendering knows how to
+display a message that already exists. It does not know why the message exists.
 
+That distinction is small but important:
+
+```text
+Good: Conversation renders "tool cwd: ..."
+Bad:  Conversation decides to run the cwd tool
+```
+
+## The Parser Boundary
+
+Now add `src/tools/ToolRequestParser.ts`:
+
+```ts
 export interface ToolRequest {
-  name: string;
-  input?: string;
+  readonly name: string;
+  readonly input?: string;
 }
 
-export interface CommandOptions {
-  cwd?: string;
-  timeoutMs?: number;
-}
+export class ToolRequestParser {
+  parse(text: string): ToolRequest | undefined {
+    const match = text.trim().match(/^TOOL ([a-zA-Z0-9_-]+)(?:\s*:\s*(.*))?$/);
 
-export function createUserMessage(content: string): AgentMessage {
-  return { role: "user", content };
-}
-
-export function createAssistantMessage(content: string): AgentMessage {
-  return { role: "assistant", content };
-}
-
-export function createToolMessage(name: string, content: string): AgentMessage {
-  return { role: "tool", name, content };
-}
-
-export function createEchoModelClient(): ModelClient {
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const latestMessage = conversation.at(-1);
-
-      if (latestMessage?.role === "tool") {
-        return `saw tool ${latestMessage.name}: ${latestMessage.content}`;
-      }
-
-      const normalizedPrompt = prompt.toLowerCase();
-
-      if (
-        normalizedPrompt.includes("use the cwd tool") ||
-        normalizedPrompt.includes("run pwd")
-      ) {
-        return "TOOL cwd";
-      }
-
-      return `agent heard: ${prompt}`;
-    },
-  };
-}
-
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-): ModelClient {
-  const client = new OpenAI();
-
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const contextText = conversation
-        .map((message) => {
-          if (message.role === "tool") {
-            return `tool ${message.name}: ${message.content}`;
-          }
-
-          return `${message.role}: ${message.content}`;
-        })
-        .join("\n");
-
-      const response = await client.responses.create({
-        model,
-        instructions: [
-          "You are connected to a tiny learning harness.",
-          "If you need the current working directory, respond exactly: TOOL cwd",
-          "Do not request bash commands.",
-          "After a tool result appears, answer the user in normal text.",
-        ].join("\n"),
-        input: [contextText, prompt]
-          .filter((part) => part.length > 0)
-          .join("\n"),
-      });
-
-      return response.output_text;
-    },
-  };
-}
-
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-
-  return [...conversation, userMessage, assistantMessage];
-}
-
-export async function runTurnWithTools(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-  toolRegistry: ToolRegistry,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const afterUser = [...conversation, userMessage];
-
-  const assistantContent = await modelClient.createResponse(prompt, afterUser);
-  const assistantMessage = createAssistantMessage(assistantContent);
-  const afterAssistant = [...afterUser, assistantMessage];
-
-  const toolRequest = parseToolRequest(assistantContent);
-
-  if (!toolRequest) {
-    return afterAssistant;
-  }
-
-  const toolResult = await executeTool(
-    toolRegistry,
-    toolRequest.name,
-    toolRequest.input,
-  );
-  const toolMessage = createToolMessage(toolRequest.name, toolResult);
-  const afterTool = [...afterAssistant, toolMessage];
-
-  const finalAssistantContent = await modelClient.createResponse("", afterTool);
-  const finalAssistantMessage = createAssistantMessage(finalAssistantContent);
-
-  return [...afterTool, finalAssistantMessage];
-}
-
-export function parseToolRequest(text: string): ToolRequest | undefined {
-  const match = text.trim().match(/^TOOL ([a-zA-Z0-9_-]+)(?:\s*:\s*(.*))?$/);
-
-  if (!match) {
-    return undefined;
-  }
-
-  const [, name, input] = match;
-
-  return {
-    name,
-    input: input && input.length > 0 ? input : undefined,
-  };
-}
-
-export function renderTranscript(conversation: Conversation): string {
-  return conversation
-    .map((message) => {
-      if (message.role === "tool") {
-        return `tool ${message.name}: ${message.content}`;
-      }
-
-      return `${message.role}: ${message.content}`;
-    })
-    .join("\n");
-}
-
-export function createCurrentDirectoryTool(options?: {
-  cwd?: string;
-}): ToolDefinition {
-  const cwd = options?.cwd ?? process.cwd();
-
-  return {
-    name: "cwd",
-    description: "Return the current working directory.",
-    async execute() {
-      return cwd;
-    },
-  };
-}
-
-export async function executeCommand(
-  command: string,
-  options?: CommandOptions,
-): Promise<string> {
-  const timeoutMs = options?.timeoutMs ?? 5000;
-
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    const child = spawn(command, {
-      cwd: options?.cwd,
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill();
-    }, timeoutMs);
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-
-      const exitCode = timedOut ? "timeout" : String(code ?? 0);
-
-      resolve(
-        [
-          `exit code: ${exitCode}`,
-          "stdout:",
-          stdout.trimEnd(),
-          "stderr:",
-          stderr.trimEnd(),
-        ].join("\n"),
-      );
-    });
-  });
-}
-
-export function createBashTool(options?: CommandOptions): ToolDefinition {
-  return {
-    name: "bash",
-    description: "Run a bash command and return exit code, stdout, and stderr.",
-    async execute(input?: string) {
-      if (!input || input.trim().length === 0) {
-        throw new Error("bash tool requires a command.");
-      }
-
-      return executeCommand(input, options);
-    },
-  };
-}
-
-export function createToolRegistry(
-  tools: readonly ToolDefinition[],
-): ToolRegistry {
-  const registry = new Map<string, ToolDefinition>();
-
-  for (const tool of tools) {
-    if (registry.has(tool.name)) {
-      throw new Error(`Duplicate tool name: ${tool.name}`);
+    if (!match) {
+      return undefined;
     }
 
-    registry.set(tool.name, tool);
+    const [, name, input] = match;
+
+    return {
+      name,
+      input: input && input.length > 0 ? input : undefined,
+    };
+  }
+}
+```
+
+The parser accepts two forms:
+
+```text
+TOOL cwd
+TOOL bash: pwd
+```
+
+It ignores normal assistant text:
+
+```text
+agent heard: hello
+```
+
+Putting this in a class avoids an ad hoc string check inside `cli.ts` or a
+buried helper in `index.ts`. `AgentLoop` can ask a parser whether assistant text
+contains a request, and the parser can evolve later when the protocol becomes
+structured.
+
+## The Echo Model Simulates Tool Use
+
+The deterministic model client needs just enough behavior to test both paths.
+
+`src/model/EchoModelClient.ts`:
+
+```ts
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
+
+export class EchoModelClient implements ModelClient {
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const latestMessage = messages.at(-1);
+
+    if (latestMessage?.role === "tool") {
+      return `saw tool ${latestMessage.name}: ${latestMessage.content}`;
+    }
+
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((message) => message.role === "user");
+    const prompt = lastUserMessage?.content ?? "";
+    const normalizedPrompt = prompt.toLowerCase();
+
+    if (
+      normalizedPrompt.includes("use the cwd tool") ||
+      normalizedPrompt.includes("run pwd")
+    ) {
+      return "TOOL cwd";
+    }
+
+    return `agent heard: ${prompt}`;
+  }
+}
+```
+
+This class is still a fake. It is useful because it creates deterministic model
+behavior:
+
+- a normal prompt returns normal assistant text
+- a tool-ish prompt returns `TOOL cwd`
+- a conversation ending in a tool result returns a final assistant response
+
+That last branch simulates the second model call. The model sees:
+
+```text
+user: use the cwd tool
+assistant: TOOL cwd
+tool cwd: /path/to/ty-term
+```
+
+and replies:
+
+```text
+saw tool cwd: /path/to/ty-term
+```
+
+## The Real Provider Gets Instructions
+
+`OpenAIModelClient` still hides provider-specific details, but now it should
+tell the model about the tiny text protocol.
+
+`src/model/OpenAIModelClient.ts`:
+
+```ts
+import OpenAI from "openai";
+import type { AgentMessage } from "../agent/AgentMessage";
+import type { ModelClient } from "./ModelClient";
+
+export class OpenAIModelClient implements ModelClient {
+  private readonly client: OpenAI;
+
+  constructor(
+    private readonly model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    client = new OpenAI(),
+  ) {
+    this.client = client;
   }
 
-  return registry;
-}
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model,
+      instructions: [
+        "You are connected to a tiny learning harness.",
+        "If you need the current working directory, respond exactly: TOOL cwd",
+        "Do not request bash commands.",
+        "After a tool result appears, answer the user in normal text.",
+      ].join("\n"),
+      input: messages.map((message) => {
+        if (message.role === "tool") {
+          return {
+            role: "user" as const,
+            content: `tool ${message.name}: ${message.content}`,
+          };
+        }
 
-export function getTool(
-  registry: ToolRegistry,
-  name: string,
-): ToolDefinition | undefined {
-  return registry.get(name);
-}
+        return {
+          role: message.role,
+          content: message.content,
+        };
+      }),
+    });
 
-export async function executeTool(
-  registry: ToolRegistry,
-  name: string,
-  input?: string,
-): Promise<string> {
-  const tool = getTool(registry, name);
-
-  if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
+    return response.output_text;
   }
-
-  return tool.execute(input);
 }
 ```
 
-## What Changed
+The provider client maps local `tool` messages into text because this chapter is
+not using provider-native tool calling yet. The rest of the harness does not
+need to know that detail. It only depends on `ModelClient`.
 
-`AgentRole` now includes `tool`:
+The instruction "Do not request bash commands" matches the capability boundary:
+manual CLI tool execution can still use `bash`, but the model-driven registry in
+this chapter will only expose `cwd`.
 
-```ts
-export type AgentRole = "user" | "assistant" | "tool";
-```
+## AgentLoop Owns The Tool Turn
 
-Tool messages also need a name:
+Now update the orchestrator.
 
-```ts
-export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-  name?: string;
-}
-```
-
-The `name` is optional because user and assistant messages do not need it. A stricter design would use a discriminated union, but that would distract from the loop shape in this chapter.
-
-The echo model is no longer just an echo. It has enough behavior to test the loop without calling a real provider:
+`src/agent/AgentLoop.ts`:
 
 ```ts
-if (latestMessage?.role === "tool") {
-  return `saw tool ${latestMessage.name}: ${latestMessage.content}`;
-}
-```
+import { AgentMessageFactory } from "./AgentMessageFactory";
+import type { Conversation } from "./Conversation";
+import type { ModelClient } from "../model/ModelClient";
+import type { ToolRegistry } from "../tools/ToolRegistry";
+import { ToolRequestParser } from "../tools/ToolRequestParser";
 
-That branch simulates the second model call, where the model receives a tool result and writes a final answer.
+export class AgentLoop {
+  constructor(
+    private readonly messageFactory: AgentMessageFactory,
+    private readonly modelClient: ModelClient,
+    private readonly toolRegistry?: ToolRegistry,
+    private readonly toolRequestParser = new ToolRequestParser(),
+  ) {}
 
-## The Tool Loop
+  async runTurn(conversation: Conversation, prompt: string): Promise<void> {
+    const userMessage = this.messageFactory.createUserMessage(prompt);
+    const afterUser = [...conversation.getMessages(), userMessage];
 
-The key function is `runTurnWithTools`:
+    const assistantContent = await this.modelClient.createResponse(afterUser);
+    const assistantMessage =
+      this.messageFactory.createAssistantMessage(assistantContent);
+    const afterAssistant = [...afterUser, assistantMessage];
 
-```ts
-export async function runTurnWithTools(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-  toolRegistry: ToolRegistry,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const afterUser = [...conversation, userMessage];
+    const toolRequest = this.toolRequestParser.parse(assistantContent);
 
-  const assistantContent = await modelClient.createResponse(prompt, afterUser);
-  const assistantMessage = createAssistantMessage(assistantContent);
-  const afterAssistant = [...afterUser, assistantMessage];
+    if (!toolRequest) {
+      conversation.appendMessages(userMessage, assistantMessage);
+      return;
+    }
 
-  const toolRequest = parseToolRequest(assistantContent);
+    if (!this.toolRegistry) {
+      throw new Error(
+        `Tool requested without a tool registry: ${toolRequest.name}`,
+      );
+    }
 
-  if (!toolRequest) {
-    return afterAssistant;
+    const toolResult = await this.toolRegistry.execute(
+      toolRequest.name,
+      toolRequest.input,
+    );
+    const toolMessage = this.messageFactory.createToolMessage(
+      toolRequest.name,
+      toolResult,
+    );
+    const afterTool = [...afterAssistant, toolMessage];
+
+    const finalAssistantContent =
+      await this.modelClient.createResponse(afterTool);
+    const finalAssistantMessage = this.messageFactory.createAssistantMessage(
+      finalAssistantContent,
+    );
+
+    conversation.appendMessages(
+      userMessage,
+      assistantMessage,
+      toolMessage,
+      finalAssistantMessage,
+    );
   }
-
-  const toolResult = await executeTool(
-    toolRegistry,
-    toolRequest.name,
-    toolRequest.input,
-  );
-  const toolMessage = createToolMessage(toolRequest.name, toolResult);
-  const afterTool = [...afterAssistant, toolMessage];
-
-  const finalAssistantContent = await modelClient.createResponse("", afterTool);
-  const finalAssistantMessage = createAssistantMessage(finalAssistantContent);
-
-  return [...afterTool, finalAssistantMessage];
 }
 ```
 
-There are two deliberate limits:
+Read the method as a small state machine:
 
-- It runs at most one tool per user turn.
-- It sends the model a final tool result once, then stops.
+```text
+1. Create the user message.
+2. Call the model with prior conversation plus the user message.
+3. Parse the assistant response.
+4. If there is no tool request, append user + assistant and stop.
+5. If there is a tool request, execute it through ToolRegistry.
+6. Create a tool message from the result.
+7. Call the model again with the tool result included.
+8. Append user + assistant + tool + final assistant.
+```
 
-Those limits keep accidental loops out of the first implementation. Later, a real loop can repeat this cycle until the model returns normal text, but only after the harness has stronger guardrails.
+The loop still mutates the conversation only after the turn succeeds. That keeps
+the Chapter 3 invariant:
 
-## `src/cli.ts`
+```text
+Conversation contains complete turns after AgentLoop.runTurn() succeeds.
+```
 
-Replace the file with this version:
+The first tool-aware loop also has two deliberate limits:
+
+- it runs at most one tool per user turn
+- it calls the model once after the tool result, then stops
+
+Those limits prevent accidental infinite loops. A production agent eventually
+needs a repeated loop with iteration limits, cancellation, approvals, and
+structured events. This chapter teaches the first complete shape before adding
+those guardrails.
+
+## The Barrel File Exports Objects, Not Behavior
+
+`src/index.ts` stays boring:
 
 ```ts
-#!/usr/bin/env node
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+```
+
+There is still no `runTurnWithTools()` helper in this file. That behavior has a
+home now: `AgentLoop`.
+
+## The CLI Uses Two Registries
+
+The CLI keeps the manual tool path from Chapters 4 and 5. That path can run
+`bash` because a human explicitly asked for it:
+
+```bash
+bun run dev -- --tool bash "pwd"
+```
+
+The model-driven path gets a smaller registry:
+
+```text
+manual registry: cwd + bash
+model registry:  cwd only
+```
+
+That split is the chapter's capability boundary.
+
+`src/cli.ts`:
+
+```ts
+#!/usr/bin/env bun
+
 import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createToolRegistry,
-  executeTool,
-  renderTranscript,
-  runTurnWithTools,
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  OpenAIModelClient,
+  ToolRegistry,
 } from "./index";
 
 interface ParsedArgs {
-  useOpenAI: boolean;
-  toolName?: string;
-  toolInput?: string;
-  prompt: string;
+  readonly useOpenAI: boolean;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -513,12 +605,12 @@ async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool(),
-      createBashTool(),
+    const manualToolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(),
+      new BashTool(),
     ]);
-    const result = await executeTool(
-      registry,
+
+    const result = await manualToolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -529,6 +621,8 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error("       bun run dev -- --tool cwd");
+    console.error('       bun run dev -- --tool bash "pwd"');
     process.exit(1);
   }
 
@@ -537,19 +631,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const conversation: Conversation = [];
-  const modelToolRegistry = createToolRegistry([createCurrentDirectoryTool()]);
-  const nextConversation = await runTurnWithTools(
-    conversation,
-    parsed.prompt,
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const modelToolRegistry = new ToolRegistry([new CurrentDirectoryTool()]);
+  const agentLoop = new AgentLoop(
+    messageFactory,
     modelClient,
     modelToolRegistry,
   );
+  const conversation = new Conversation();
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  await agentLoop.runTurn(conversation, parsed.prompt);
+
+  console.log(conversation.renderTranscript());
 }
 
 main().catch((error: unknown) => {
@@ -559,71 +655,131 @@ main().catch((error: unknown) => {
 });
 ```
 
-The CLI now has two tool registries:
+Notice what the CLI does not do:
 
-- Manual `--tool`: `cwd` and `bash`
-- Model-driven prompt: `cwd` only
+- it does not parse `TOOL cwd`
+- it does not append tool messages
+- it does not call the model a second time
+- it does not call `runShellCommand()`
 
-That split is the lesson. The registry is not just a lookup table. It is the capability boundary.
+The CLI composes the dependencies and then gets out of the way.
 
-## `tests/agent.test.ts`
+## Tests For The Parser
 
-Replace the file with this version:
+Start with the smallest new object.
+
+`tests/tool-request-parser.test.ts`:
+
+```ts
+import { describe, expect, it } from "bun:test";
+import { ToolRequestParser } from "../src/index";
+
+describe("ToolRequestParser", () => {
+  it("parses a tool request without input", () => {
+    const parser = new ToolRequestParser();
+
+    expect(parser.parse("TOOL cwd")).toEqual({ name: "cwd" });
+  });
+
+  it("parses a tool request with input", () => {
+    const parser = new ToolRequestParser();
+
+    expect(parser.parse("TOOL bash: pwd")).toEqual({
+      name: "bash",
+      input: "pwd",
+    });
+  });
+
+  it("ignores normal assistant text", () => {
+    const parser = new ToolRequestParser();
+
+    expect(parser.parse("agent heard: hello")).toBeUndefined();
+  });
+});
+```
+
+These tests keep the syntax local. If a later chapter replaces text requests
+with structured provider calls, the parser tests show exactly what changed.
+
+## Tests For The Tool-Aware Loop
+
+Now update `tests/agent-loop.test.ts` so `AgentLoop` proves both branches.
 
 ```ts
 import { describe, expect, it } from "bun:test";
 import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createToolMessage,
-  createToolRegistry,
-  executeCommand,
-  executeTool,
-  getTool,
-  parseToolRequest,
-  renderTranscript,
-  runTurn,
-  runTurnWithTools,
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  ToolRegistry,
+  type AgentMessage,
+  type ModelClient,
 } from "../src/index";
 
-function nodeCommand(script: string): string {
-  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
+class RecordingModelClient implements ModelClient {
+  public receivedMessages: AgentMessage[] = [];
+
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    this.receivedMessages = messages;
+    return "model response";
+  }
 }
 
-describe("agent turn", () => {
-  it("keeps the normal prompt contract stable", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
+class UnknownToolModelClient implements ModelClient {
+  async createResponse(): Promise<string> {
+    return "TOOL missing";
+  }
+}
 
-    expect(renderTranscript(conversation)).toBe(
+describe("AgentLoop", () => {
+  it("keeps the normal prompt path stable", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
+      new ToolRegistry([new CurrentDirectoryTool("/learn/harness")]),
+    );
+
+    await agentLoop.runTurn(conversation, "hello");
+
+    expect(conversation.renderTranscript()).toBe(
       "user: hello\nassistant: agent heard: hello",
     );
   });
 
-  it("does not mutate the previous conversation", async () => {
-    const original: Conversation = [{ role: "user", content: "earlier" }];
-
-    await runTurn(original, "next", createEchoModelClient());
-
-    expect(original).toEqual([{ role: "user", content: "earlier" }]);
-  });
-});
-
-describe("tool-aware agent turn", () => {
-  it("runs one requested cwd tool and adds the final assistant response", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
+  it("passes prior conversation plus the new user message to the model", async () => {
+    const modelClient = new RecordingModelClient();
+    const conversation = new Conversation([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
     ]);
+    const agentLoop = new AgentLoop(new AgentMessageFactory(), modelClient);
 
-    const conversation = await runTurnWithTools(
-      [],
-      "use the cwd tool",
-      createEchoModelClient(),
+    await agentLoop.runTurn(conversation, "next");
+
+    expect(modelClient.receivedMessages).toEqual([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "previous answer" },
+      { role: "user", content: "next" },
+    ]);
+  });
+
+  it("runs one requested cwd tool and appends the final assistant response", async () => {
+    const conversation = new Conversation();
+    const registry = new ToolRegistry([
+      new CurrentDirectoryTool("/learn/harness"),
+    ]);
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new EchoModelClient(),
       registry,
     );
 
-    expect(conversation).toEqual([
+    await agentLoop.runTurn(conversation, "use the cwd tool");
+
+    expect(conversation.getMessages()).toEqual([
       { role: "user", content: "use the cwd tool" },
       { role: "assistant", content: "TOOL cwd" },
       { role: "tool", name: "cwd", content: "/learn/harness" },
@@ -631,157 +787,73 @@ describe("tool-aware agent turn", () => {
     ]);
   });
 
-  it("does not run a tool when the assistant response is normal text", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
-
-    const conversation = await runTurnWithTools(
-      [],
-      "hello",
-      createEchoModelClient(),
-      registry,
+  it("uses the registry as the model tool allowlist", async () => {
+    const conversation = new Conversation();
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
+      new UnknownToolModelClient(),
+      new ToolRegistry([]),
     );
 
-    expect(renderTranscript(conversation)).toBe(
-      "user: hello\nassistant: agent heard: hello",
-    );
-  });
-
-  it("uses the registry as the allowlist", async () => {
-    await expect(
-      runTurnWithTools(
-        [],
-        "use the cwd tool",
-        createEchoModelClient(),
-        createToolRegistry([]),
-      ),
-    ).rejects.toThrow("Unknown tool: cwd");
-  });
-});
-
-describe("tool request parsing", () => {
-  it("parses a tool request without input", () => {
-    expect(parseToolRequest("TOOL cwd")).toEqual({ name: "cwd" });
-  });
-
-  it("parses a tool request with input", () => {
-    expect(parseToolRequest("TOOL bash: pwd")).toEqual({
-      name: "bash",
-      input: "pwd",
-    });
-  });
-
-  it("ignores normal assistant text", () => {
-    expect(parseToolRequest("agent heard: hello")).toBeUndefined();
-  });
-});
-
-describe("transcript rendering", () => {
-  it("renders tool messages with the tool name", () => {
-    expect(renderTranscript([createToolMessage("cwd", "/learn/harness")])).toBe(
-      "tool cwd: /learn/harness",
-    );
-  });
-});
-
-describe("tool registry", () => {
-  it("stores tools by name", () => {
-    const cwdTool = createCurrentDirectoryTool({ cwd: "/learn/harness" });
-    const registry = createToolRegistry([cwdTool]);
-
-    expect(getTool(registry, "cwd")).toBe(cwdTool);
-  });
-
-  it("rejects duplicate tool names", () => {
-    expect(() =>
-      createToolRegistry([
-        createCurrentDirectoryTool({ cwd: "/one" }),
-        createCurrentDirectoryTool({ cwd: "/two" }),
-      ]),
-    ).toThrow("Duplicate tool name: cwd");
-  });
-
-  it("executes a named tool", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
-
-    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
-  });
-
-  it("passes input to a named tool", async () => {
-    const registry = createToolRegistry([createBashTool({ timeoutMs: 1000 })]);
-
-    await expect(
-      executeTool(registry, "bash", nodeCommand("process.stdout.write('ok')")),
-    ).resolves.toContain("stdout:\nok");
-  });
-
-  it("reports unknown tools", async () => {
-    const registry = createToolRegistry([]);
-
-    await expect(executeTool(registry, "missing")).rejects.toThrow(
+    await expect(agentLoop.runTurn(conversation, "try a tool")).rejects.toThrow(
       "Unknown tool: missing",
     );
   });
-});
 
-describe("bash command execution", () => {
-  it("captures stdout with an exit code", async () => {
-    const result = await executeCommand(
-      nodeCommand("process.stdout.write('ok')"),
-      { timeoutMs: 1000 },
-    );
+  it("renders tool messages in transcripts", async () => {
+    const conversation = new Conversation([
+      { role: "tool", name: "cwd", content: "/learn/harness" },
+    ]);
 
-    expect(result).toContain("exit code: 0");
-    expect(result).toContain("stdout:\nok");
-    expect(result).toContain("stderr:");
-  });
-
-  it("captures stderr and nonzero exit codes", async () => {
-    const result = await executeCommand(
-      nodeCommand("process.stderr.write('bad'); process.exit(7)"),
-      { timeoutMs: 1000 },
-    );
-
-    expect(result).toContain("exit code: 7");
-    expect(result).toContain("stderr:\nbad");
-  });
-
-  it("rejects empty bash tool input", async () => {
-    const bashTool = createBashTool();
-
-    await expect(bashTool.execute()).rejects.toThrow(
-      "bash tool requires a command.",
-    );
+    expect(conversation.renderTranscript()).toBe("tool cwd: /learn/harness");
   });
 });
 ```
 
-## Run It
+The tests cover the chapter's four important contracts:
 
-Run the checks:
+- a normal prompt still works
+- a tool request goes through `ToolRegistry`
+- an unknown model-requested tool fails at the registry boundary
+- tool messages render as transcript lines
+
+Keep the Chapter 5 bash tests too. They still prove that `BashTool` owns command
+execution and that manual `--tool bash` dispatch works through the registry.
+
+## Try It
+
+Install dependencies if needed:
+
+```bash
+bun install
+```
+
+Build:
 
 ```bash
 bun run build
+```
+
+Run tests:
+
+```bash
 bun test
 ```
 
-Then run the normal path:
+Run the normal prompt path:
 
 ```bash
 bun run dev -- "hello"
 ```
 
-Expected shape:
+Expected output:
 
 ```text
 user: hello
 assistant: agent heard: hello
 ```
 
-Now run the tool path:
+Run the model-driven tool path:
 
 ```bash
 bun run dev -- "use the cwd tool"
@@ -798,30 +870,56 @@ assistant: saw tool cwd: /path/to/ty-term
 
 The exact path depends on your machine.
 
-## Reference Pointer
+Run the manual bash path from Chapter 5:
 
-In `pi-mono`, compare this chapter with:
+```bash
+bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
+```
 
-- `pi-mono/packages/agent/src/agent-loop.ts`
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-- `pi-mono/packages/coding-agent/src/core/bash-executor.ts`
+Expected output:
 
-The production code has a richer loop, typed tool calls, cancellation, session state, approvals, and better error handling. This chapter keeps only the central idea: the model can request an allowlisted capability, the harness executes it, and the result goes back into the conversation.
+```text
+tool bash:
+exit code: 0
+stdout:
+ok
+stderr:
+```
+
+That command still works because manual tools and model tools are separate
+registries. The model did not gain the ability to run shell commands.
 
 ## What We Simplified
 
-We used a text tool protocol instead of provider-native tool calling. We allowed only one tool call per turn. We exposed only `cwd` to the model and kept `bash` manual.
+This chapter uses a text protocol instead of provider-native structured tool
+calls. It allows only one model-requested tool per turn. It exposes only `cwd`
+to the model, even though the manual registry still contains `bash`.
 
-Those simplifications make the shape of the loop easy to inspect before the harness grows more realistic.
+Those simplifications keep the core loop visible:
+
+```text
+user -> model -> parser -> registry -> tool message -> model -> transcript
+```
+
+The architecture is intentionally ready to grow:
+
+- `ToolRequestParser` can evolve or be replaced when tool calls become
+  structured.
+- `ToolRegistry` remains the model capability allowlist.
+- `AgentLoop` remains the orchestration owner.
+- `Conversation` remains simple message storage and rendering.
 
 ## Checkpoint
 
 You now have:
 
 - structured user, assistant, and tool messages
-- a parser for simple tool requests
-- a model-aware tool loop
-- a registry acting as a model capability allowlist
+- `AgentMessageFactory.createToolMessage()`
+- a `ToolRequestParser` boundary
+- a model-aware tool loop inside `AgentLoop`
+- a registry acting as the model capability allowlist
 - manual shell execution still separated from model-driven execution
 
-The next chapter adds a safer and more useful coding-agent capability: reading files from the project.
+The next chapter adds the first genuinely useful coding-agent tool:
+`ReadFileTool`. It should be another `Tool` implementation, not a branch inside
+`cli.ts` or `AgentLoop`.

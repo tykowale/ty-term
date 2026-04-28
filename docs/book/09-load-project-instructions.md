@@ -1,68 +1,154 @@
 # Chapter 9: Load Project Instructions
 
-## Where We Are
-
 Chapter 8 gave `ty-term` durable memory:
 
 ```text
-CLI starts -> load previous messages -> run one turn -> append new messages
+CLI starts -> load previous messages -> hydrate Conversation -> run one turn -> append new messages
 ```
 
-The harness can remember a conversation, read project files, and let the model request safe tools. But it still treats every project the same. Real coding harnesses read local guidance before answering: style rules, test commands, workflow constraints, and repository-specific warnings.
+That is the right shape for session history. The harness can remember what the
+user said, what the assistant answered, and what tools returned.
 
-This chapter adds the smallest useful version of that behavior:
+But a coding harness also needs project-specific guidance. Repositories often
+have rules that are not part of any one conversation:
 
 ```text
-AGENTS.md at project root -> load once per CLI run -> pass into every model call
+Use small patches.
+Run bun test before reporting completion.
+Do not edit generated files.
+Prefer the existing OOP boundaries.
 ```
 
-If `AGENTS.md` exists, the model receives its contents. If it is missing, the harness continues with empty instructions.
+Those rules should affect model calls, but they should not become conversation
+messages. If we append `AGENTS.md` to every JSONL session, the session history
+becomes polluted with context that can change independently of the conversation.
 
-## Learning Objective
+This chapter adds two named boundaries:
 
-Learn how to keep project guidance separate from conversation history:
+```text
+ProjectInstructions owns locating, loading, and formatting local guidance.
+ModelContext owns the model-facing context passed into ModelClient.
+```
+
+The invariant for this chapter is:
+
+```text
+Project instructions are model context, not session history.
+```
+
+## Where This Fits
+
+At the end of Chapter 8, the main objects were already separated:
+
+```text
+Conversation stores and renders messages.
+AgentMessageFactory creates user, assistant, and tool messages.
+ToolRegistry owns lookup and dispatch.
+ReadFileTool owns project-root path safety.
+JsonlSessionStore persists plain AgentMessage records.
+AgentLoop orchestrates one turn.
+cli.ts composes dependencies and prints output.
+```
+
+Chapter 9 keeps that split. The new project-instruction behavior does not
+belong in `Conversation`, because instructions are not messages. It does not
+belong in `JsonlSessionStore`, because the session store should persist only
+conversation records. It does not belong in `OpenAIModelClient`, because a model
+provider should receive context, not know how to find files in the current
+project.
+
+So the flow becomes:
 
 ```mermaid
 flowchart LR
-  CLI[CLI starts] --> Root[Resolve project root]
-  Root --> Agents[Read AGENTS.md]
-  Agents --> Context[Build model context]
-  Context --> Turn[Run agent turn]
-  Turn --> Model1[Model call]
-  Model1 --> Tool[Optional tool]
-  Tool --> Model2[Final model call]
+  CLI[cli.ts] --> Project[ProjectInstructions.load]
+  Project --> Context[ModelContext]
+  CLI --> Store[JsonlSessionStore.load]
+  Store --> Conversation[Conversation.fromMessages]
+  Context --> Loop[AgentLoop.runTurn]
+  Conversation --> Loop
+  Loop --> Model[ModelClient.createResponse]
+  Loop --> Tools[ToolRegistry.execute]
+  Conversation --> Append[JsonlSessionStore.append]
 ```
 
-The invariant is:
+The CLI is still the composition root. It wires objects together. It does not
+format instructions itself.
 
-> Project instructions are model context, not session messages.
+## The File Layout
 
-That means `AGENTS.md` affects every model call, but the file is not appended to `.ty-term/sessions/*.jsonl`.
+Add one project object and one model context object:
 
-## Build The Slice
-
-Change three files:
-
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
-
-No new dependencies are needed. This chapter uses Node’s standard library only.
-
-## `src/index.ts`
-
-Chapter 8 already imports `readFile`, so keep the filesystem import:
-
-```ts
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    ModelContext.ts
+    OpenAIModelClient.ts
+  project/
+    ProjectInstructions.ts
+  session/
+    JsonlSessionStore.ts
+    SessionStore.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    ReadFileTool.ts
+    Tool.ts
+    ToolRegistry.ts
+    ToolRequestParser.ts
+  cli.ts
+  index.ts
+tests/
+  project-instructions.test.ts
+  model-context.test.ts
 ```
 
-Add model context near `Conversation`:
+`src/index.ts` remains a barrel file. It exports the new classes and types, but
+it does not contain project-loading behavior.
+
+## ModelContext Is The Model-Facing Envelope
+
+Create `src/model/ModelContext.ts`:
 
 ```ts
-export interface ModelContext {
-  projectInstructions: string;
+export class ModelContext {
+  readonly projectInstructions: string;
+
+  constructor(options: { projectInstructions?: string } = {}) {
+    this.projectInstructions = options.projectInstructions ?? "";
+  }
+
+  hasProjectInstructions(): boolean {
+    return this.projectInstructions.length > 0;
+  }
 }
+```
+
+This class is intentionally small. It gives a name to information that is sent
+to the model but is not part of the transcript:
+
+```text
+Conversation -> user, assistant, and tool history
+ModelContext -> extra model-facing context
+```
+
+Right now `ModelContext` has one field. Later it could carry date, working
+directory, enabled tool descriptions, feature flags, or skill summaries. The
+important part is that the provider receives a prepared context object. The
+provider does not discover that context by reading project files.
+
+Update `src/model/ModelClient.ts`:
+
+```ts
+import type { Conversation } from "../agent/Conversation";
+import type { ModelContext } from "./ModelContext";
 
 export interface ModelClient {
   createResponse(
@@ -71,6 +157,190 @@ export interface ModelClient {
     context: ModelContext,
   ): Promise<string>;
 }
+```
+
+Every model call now gets the same three inputs:
+
+```text
+the current prompt
+the conversation so far
+the model context for this run
+```
+
+That keeps the call site honest. If `AgentLoop` calls the model twice during a
+tool turn, both calls must receive the same `ModelContext`.
+
+## EchoModelClient Accepts Context Without Using It
+
+The echo client is still a deterministic test double. It does not need project
+instructions, but it should implement the same interface as real providers.
+
+Update `src/model/EchoModelClient.ts`:
+
+```ts
+import type { Conversation } from "../agent/Conversation";
+import type { ModelClient } from "./ModelClient";
+import type { ModelContext } from "./ModelContext";
+
+export class EchoModelClient implements ModelClient {
+  async createResponse(
+    prompt: string,
+    _conversation: Conversation,
+    _context: ModelContext,
+  ): Promise<string> {
+    if (prompt.length === 0) {
+      return "done";
+    }
+
+    if (prompt.includes("where") && prompt.includes("I")) {
+      return "TOOL cwd";
+    }
+
+    if (prompt.startsWith("read file ")) {
+      return `TOOL read_file: ${prompt.slice("read file ".length)}`;
+    }
+
+    return `agent heard: ${prompt}`;
+  }
+}
+```
+
+The underscores are not throwaway architecture. They tell the reader this class
+conforms to the same model boundary, even though this implementation does not
+need every argument.
+
+## ProjectInstructions Owns Local Guidance
+
+Create `src/project/ProjectInstructions.ts`:
+
+```ts
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { ModelContext } from "../model/ModelContext";
+import { resolveProjectRoot } from "../tools/ReadFileTool";
+
+export class ProjectInstructions {
+  private readonly projectRoot: string;
+  private readonly fileName: string;
+  private readonly content: string;
+
+  private constructor(options: {
+    projectRoot: string;
+    fileName: string;
+    content: string;
+  }) {
+    this.projectRoot = options.projectRoot;
+    this.fileName = options.fileName;
+    this.content = options.content;
+  }
+
+  static async load(
+    projectRoot = resolveProjectRoot(),
+    fileName = "AGENTS.md",
+  ): Promise<ProjectInstructions> {
+    const resolvedRoot = resolveProjectRoot(projectRoot);
+    const filePath = path.join(resolvedRoot, fileName);
+
+    try {
+      const content = await readFile(filePath, "utf8");
+
+      return new ProjectInstructions({
+        projectRoot: resolvedRoot,
+        fileName,
+        content,
+      });
+    } catch (error: unknown) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return new ProjectInstructions({
+          projectRoot: resolvedRoot,
+          fileName,
+          content: "",
+        });
+      }
+
+      throw error;
+    }
+  }
+
+  get filePath(): string {
+    return path.join(this.projectRoot, this.fileName);
+  }
+
+  get text(): string {
+    return this.content;
+  }
+
+  toModelContext(): ModelContext {
+    return new ModelContext({
+      projectInstructions: this.formatForModel(),
+    });
+  }
+
+  private formatForModel(): string {
+    return this.content.trimEnd();
+  }
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+```
+
+This object has three jobs:
+
+```text
+locate AGENTS.md
+load its contents if it exists
+format that text for ModelContext
+```
+
+It also has clear refusals:
+
+```text
+It does not append messages.
+It does not call the model.
+It does not execute tools.
+It does not decide how OpenAI structures prompts.
+```
+
+Only a missing `AGENTS.md` becomes empty instructions:
+
+```ts
+if (isNodeError(error) && error.code === "ENOENT") {
+  return new ProjectInstructions({
+    projectRoot: resolvedRoot,
+    fileName,
+    content: "",
+  });
+}
+```
+
+Other filesystem errors still fail. If `AGENTS.md` exists but cannot be read,
+the harness should not silently run with missing guidance.
+
+The formatting method trims only trailing whitespace:
+
+```ts
+private formatForModel(): string {
+  return this.content.trimEnd();
+}
+```
+
+That keeps the author's text intact while avoiding a dangling blank block in
+provider instructions.
+
+## OpenAIModelClient Uses Context, Not Files
+
+The provider class should not know about `AGENTS.md`. It should know how to
+convert a `Conversation` and a `ModelContext` into an OpenAI request.
+
+Update `src/model/OpenAIModelClient.ts`:
+
+```ts
+import OpenAI from "openai";
+import type { Conversation } from "../agent/Conversation";
+import type { ModelClient } from "./ModelClient";
+import type { ModelContext } from "./ModelContext";
 
 export interface OpenAIResponsesClient {
   responses: {
@@ -82,21 +352,36 @@ export interface OpenAIResponsesClient {
   };
 }
 
-export interface TurnOptions {
-  projectInstructions?: string;
+export class OpenAIModelClient implements ModelClient {
+  private readonly model: string;
+  private readonly client: OpenAIResponsesClient;
+
+  constructor(
+    model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    client: OpenAIResponsesClient = new OpenAI(),
+  ) {
+    this.model = model;
+    this.client = client;
+  }
+
+  async createResponse(
+    prompt: string,
+    conversation: Conversation,
+    context: ModelContext,
+  ): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.model,
+      instructions: buildModelInstructions(context),
+      input: [conversation.renderTranscript(), prompt]
+        .filter((part) => part.length > 0)
+        .join("\n"),
+    });
+
+    return response.output_text;
+  }
 }
-```
 
-`OpenAIResponsesClient` exists only to make the OpenAI client testable without calling the network.
-
-Add instruction helpers after the message constructors:
-
-```ts
-export function createModelContext(options?: TurnOptions): ModelContext {
-  return { projectInstructions: options?.projectInstructions ?? "" };
-}
-
-export function buildModelInstructions(projectInstructions = ""): string {
+export function buildModelInstructions(context: ModelContext): string {
   const baseInstructions = [
     "You are connected to a tiny learning harness.",
     "If you need the current working directory, respond exactly: TOOL cwd",
@@ -106,7 +391,7 @@ export function buildModelInstructions(projectInstructions = ""): string {
     "After a tool result appears, answer the user in normal text.",
   ].join("\n");
 
-  if (projectInstructions.length === 0) {
+  if (!context.hasProjectInstructions()) {
     return baseInstructions;
   }
 
@@ -114,236 +399,251 @@ export function buildModelInstructions(projectInstructions = ""): string {
     baseInstructions,
     "",
     "Project instructions from AGENTS.md:",
-    projectInstructions,
+    context.projectInstructions,
   ].join("\n");
 }
 ```
 
-The tool protocol stays in the base instructions. Project instructions are appended below it, so `AGENTS.md` cannot accidentally replace the harness rules.
+The base instructions still contain the harness rules. Project instructions are
+appended below them:
 
-Update the OpenAI client:
+```text
+base tool protocol
 
-```ts
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-  openAIClient?: OpenAIResponsesClient,
-): ModelClient {
-  const client = openAIClient ?? (new OpenAI() as OpenAIResponsesClient);
-
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-      context: ModelContext,
-    ): Promise<string> {
-      const contextText = conversation
-        .map((message) => {
-          if (message.role === "tool") {
-            return `tool ${message.name}: ${message.content}`;
-          }
-
-          return `${message.role}: ${message.content}`;
-        })
-        .join("\n");
-
-      const response = await client.responses.create({
-        model,
-        instructions: buildModelInstructions(context.projectInstructions),
-        input: [contextText, prompt]
-          .filter((part) => part.length > 0)
-          .join("\n"),
-      });
-
-      return response.output_text;
-    },
-  };
-}
+Project instructions from AGENTS.md:
+...
 ```
 
-The API shape stays the same as earlier chapters: `responses.create({ model, instructions, input })`, then read `response.output_text`.
+That ordering matters. A project file can add local guidance, but it should not
+replace the harness's tool protocol.
 
-Update `runTurn`:
+Notice what is missing from this class:
 
-```ts
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-  options?: TurnOptions,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-    createModelContext(options),
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-
-  return [...conversation, userMessage, assistantMessage];
-}
+```text
+No path.join(...)
+No readFile(...)
+No resolveProjectRoot(...)
+No AGENTS.md lookup
 ```
 
-Update `runTurnWithTools` so both model calls get the same context:
+Those details belong to `ProjectInstructions`.
+
+## AgentLoop Carries Context Through The Turn
+
+Chapter 8 kept `AgentLoop` focused on one turn. That remains true. It now
+accepts a `ModelContext` for the turn and passes that context to every model
+call.
+
+Update `src/agent/AgentLoop.ts`:
 
 ```ts
-export async function runTurnWithTools(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-  toolRegistry: ToolRegistry,
-  options?: TurnOptions,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const afterUser = [...conversation, userMessage];
-  const modelContext = createModelContext(options);
+import type { ModelClient } from "../model/ModelClient";
+import { ModelContext } from "../model/ModelContext";
+import type { ToolRegistry } from "../tools/ToolRegistry";
+import { ToolRequestParser } from "../tools/ToolRequestParser";
+import type { AgentMessageFactory } from "./AgentMessageFactory";
+import type { Conversation } from "./Conversation";
 
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    afterUser,
-    modelContext,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-  const afterAssistant = [...afterUser, assistantMessage];
+export class AgentLoop {
+  private readonly messageFactory: AgentMessageFactory;
+  private readonly modelClient: ModelClient;
+  private readonly toolRegistry: ToolRegistry;
+  private readonly toolRequestParser: ToolRequestParser;
 
-  const toolRequest = parseToolRequest(assistantContent);
-
-  if (!toolRequest) {
-    return afterAssistant;
+  constructor(
+    messageFactory: AgentMessageFactory,
+    modelClient: ModelClient,
+    toolRegistry: ToolRegistry,
+    toolRequestParser = new ToolRequestParser(),
+  ) {
+    this.messageFactory = messageFactory;
+    this.modelClient = modelClient;
+    this.toolRegistry = toolRegistry;
+    this.toolRequestParser = toolRequestParser;
   }
 
-  const toolResult = await executeTool(
-    toolRegistry,
-    toolRequest.name,
-    toolRequest.input,
-  );
-  const toolMessage = createToolMessage(toolRequest.name, toolResult);
-  const afterTool = [...afterAssistant, toolMessage];
+  async runTurn(
+    conversation: Conversation,
+    prompt: string,
+    context = new ModelContext(),
+  ): Promise<void> {
+    conversation.appendMessages(this.messageFactory.createUserMessage(prompt));
 
-  const finalAssistantContent = await modelClient.createResponse(
-    "",
-    afterTool,
-    modelContext,
-  );
-  const finalAssistantMessage = createAssistantMessage(finalAssistantContent);
+    const assistantContent = await this.modelClient.createResponse(
+      prompt,
+      conversation,
+      context,
+    );
+    conversation.appendMessages(
+      this.messageFactory.createAssistantMessage(assistantContent),
+    );
 
-  return [...afterTool, finalAssistantMessage];
-}
-```
+    const toolRequest = this.toolRequestParser.parse(assistantContent);
 
-Add the `AGENTS.md` loader after `resolveProjectRoot`:
-
-```ts
-export function getProjectInstructionsFilePath(projectRoot?: string): string {
-  return path.join(resolveProjectRoot(projectRoot), "AGENTS.md");
-}
-
-export async function loadProjectInstructions(
-  projectRoot?: string,
-): Promise<string> {
-  try {
-    return await readFile(getProjectInstructionsFilePath(projectRoot), "utf8");
-  } catch (error: unknown) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return "";
+    if (!toolRequest) {
+      return;
     }
 
-    throw error;
+    const toolResult = await this.toolRegistry.execute(
+      toolRequest.name,
+      toolRequest.input,
+    );
+    conversation.appendMessages(
+      this.messageFactory.createToolMessage(toolRequest.name, toolResult),
+    );
+
+    const finalAssistantContent = await this.modelClient.createResponse(
+      "",
+      conversation,
+      context,
+    );
+    conversation.appendMessages(
+      this.messageFactory.createAssistantMessage(finalAssistantContent),
+    );
   }
 }
 ```
 
-Only `ENOENT` becomes empty instructions. Other filesystem errors still fail, which is important because an unreadable or invalid `AGENTS.md` should not be silently ignored in model mode.
+`AgentLoop` does not load project files:
 
-Finally, add `projectInstructions` to `SessionTurnOptions` and pass it through:
-
-```ts
-export interface SessionTurnOptions {
-  projectRoot?: string;
-  sessionId: string;
-  prompt: string;
-  modelClient: ModelClient;
-  toolRegistry: ToolRegistry;
-  projectInstructions?: string;
-}
+```text
+No readFile
+No AGENTS.md
+No ProjectInstructions.load()
 ```
 
-```ts
-export async function runSessionTurn(
-  options: SessionTurnOptions,
-): Promise<SessionTurnResult> {
-  const projectRoot = resolveProjectRoot(options.projectRoot);
-  const previousConversation = await loadSessionMessages(
-    projectRoot,
-    options.sessionId,
-  );
-  const nextConversation = await runTurnWithTools(
-    previousConversation,
-    options.prompt,
-    options.modelClient,
-    options.toolRegistry,
-    { projectInstructions: options.projectInstructions },
-  );
-  const appendedMessages = nextConversation.slice(previousConversation.length);
+It receives `ModelContext` from the composition root and carries it through the
+turn. That is orchestration. File discovery stays outside the agent loop.
 
-  await appendSessionMessages(projectRoot, options.sessionId, appendedMessages);
+## The Barrel File Exports Context
 
-  return {
-    previousConversation,
-    nextConversation,
-    appendedMessages,
-  };
-}
-```
-
-## The Context Boundary
-
-The new type is intentionally small:
+Update `src/index.ts`:
 
 ```ts
-export interface ModelContext {
-  projectInstructions: string;
-}
-```
-
-We could add instructions as a `system` message in `Conversation`, but this book has not introduced system messages. A separate context object makes the boundary visible:
-
-- `Conversation` is user, assistant, and tool history.
-- `ModelContext` is extra information the model should see.
-- `SessionStore` persists only conversation messages.
-
-This keeps Chapter 8’s JSONL format unchanged.
-
-## `src/cli.ts`
-
-Add `loadProjectInstructions` to the imports:
-
-```ts
-import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createReadFileTool,
-  createToolRegistry,
-  executeTool,
-  loadProjectInstructions,
-  renderTranscript,
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { ModelContext } from "./model/ModelContext";
+export {
+  OpenAIModelClient,
+  buildModelInstructions,
+  type OpenAIResponsesClient,
+} from "./model/OpenAIModelClient";
+export { ProjectInstructions } from "./project/ProjectInstructions";
+export {
+  JsonlSessionStore,
+  validateSessionId,
+} from "./session/JsonlSessionStore";
+export type { SessionStore } from "./session/SessionStore";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export {
+  ReadFileTool,
+  resolveProjectFilePath,
   resolveProjectRoot,
-  runSessionTurn,
-  runTurnWithTools,
+} from "./tools/ReadFileTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+```
+
+The barrel exports names. It still does not implement behavior.
+
+## The CLI Composes Project Context
+
+`cli.ts` now composes one more object:
+
+```text
+ProjectInstructions
+```
+
+Manual tool mode still returns before project instructions are loaded. Manual
+tool mode does not call the model, so it does not need model context.
+
+Update `src/cli.ts`:
+
+```ts
+#!/usr/bin/env bun
+
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  JsonlSessionStore,
+  OpenAIModelClient,
+  ProjectInstructions,
+  ReadFileTool,
+  ToolRegistry,
+  resolveProjectRoot,
   validateSessionId,
 } from "./index";
-```
 
-Then update `main`:
+interface ParsedArgs {
+  readonly useOpenAI: boolean;
+  readonly sessionId?: string;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
+}
 
-```ts
+function parseArgs(args: string[]): ParsedArgs {
+  let useOpenAI = false;
+  let sessionId: string | undefined;
+  let toolName: string | undefined;
+  let toolInput: string | undefined;
+  const promptParts: string[] = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--openai") {
+      useOpenAI = true;
+      continue;
+    }
+
+    if (arg === "--session") {
+      const nextArg = args[index + 1];
+
+      if (!nextArg || nextArg.startsWith("--")) {
+        throw new Error("--session requires an id.");
+      }
+
+      sessionId = nextArg;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--tool") {
+      toolName = args[index + 1];
+      toolInput = args.slice(index + 2).join(" ");
+      break;
+    }
+
+    promptParts.push(arg);
+  }
+
+  return {
+    useOpenAI,
+    sessionId,
+    toolName,
+    toolInput,
+    prompt: promptParts.join(" "),
+  };
+}
+
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
   const projectRoot = resolveProjectRoot();
@@ -353,13 +653,13 @@ async function main(): Promise<void> {
   }
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: projectRoot }),
-      createBashTool({ cwd: projectRoot }),
-      createReadFileTool({ projectRoot }),
+    const manualToolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(projectRoot),
+      new BashTool({ cwd: projectRoot }),
+      new ReadFileTool(projectRoot),
     ]);
-    const result = await executeTool(
-      registry,
+
+    const result = await manualToolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -372,6 +672,9 @@ async function main(): Promise<void> {
     console.error(
       'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
     );
+    console.error("       bun run dev -- --tool cwd");
+    console.error('       bun run dev -- --tool bash "pwd"');
+    console.error("       bun run dev -- --tool read_file package.json");
     process.exit(1);
   }
 
@@ -380,100 +683,84 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const projectInstructions = await loadProjectInstructions(projectRoot);
+  const projectInstructions = await ProjectInstructions.load(projectRoot);
+  const modelContext = projectInstructions.toModelContext();
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
-  const modelToolRegistry = createToolRegistry([
-    createCurrentDirectoryTool({ cwd: projectRoot }),
-    createReadFileTool({ projectRoot }),
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const modelToolRegistry = new ToolRegistry([
+    new CurrentDirectoryTool(projectRoot),
+    new ReadFileTool(projectRoot),
   ]);
-
-  if (parsed.sessionId) {
-    const result = await runSessionTurn({
-      projectRoot,
-      sessionId: parsed.sessionId,
-      prompt: parsed.prompt,
-      modelClient,
-      toolRegistry: modelToolRegistry,
-      projectInstructions,
-    });
-
-    process.stdout.write(`${renderTranscript(result.nextConversation)}\n`);
-    return;
-  }
-
-  const conversation: Conversation = [];
-  const nextConversation = await runTurnWithTools(
-    conversation,
-    parsed.prompt,
+  const agentLoop = new AgentLoop(
+    messageFactory,
     modelClient,
     modelToolRegistry,
-    { projectInstructions },
   );
+  const sessionStore = new JsonlSessionStore(projectRoot);
+  const conversation = parsed.sessionId
+    ? Conversation.fromMessages(await sessionStore.load(parsed.sessionId))
+    : new Conversation();
+  const startingLength = conversation.length;
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  await agentLoop.runTurn(conversation, parsed.prompt, modelContext);
+
+  if (parsed.sessionId) {
+    await sessionStore.append(
+      parsed.sessionId,
+      conversation.messagesSince(startingLength),
+    );
+  }
+
+  process.stdout.write(`${conversation.renderTranscript()}\n`);
 }
+
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+});
 ```
 
-Manual `--tool` mode returns before `loadProjectInstructions`. That is deliberate because tool mode does not call the model.
+This is the most wiring `cli.ts` has owned so far. That is acceptable for this
+chapter because the next chapter moves repeated terminal behavior into
+`InteractiveLoop`.
 
-## `tests/agent.test.ts`
-
-Add the new exports to the test imports:
+The important line is:
 
 ```ts
-import {
-  type Conversation,
-  type ModelClient,
-  appendSessionMessages,
-  buildModelInstructions,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createReadFileTool,
-  createToolMessage,
-  createToolRegistry,
-  executeCommand,
-  executeTool,
-  getProjectInstructionsFilePath,
-  getSessionFilePath,
-  getTool,
-  loadProjectInstructions,
-  loadSessionMessages,
-  parseToolRequest,
-  renderTranscript,
-  runSessionTurn,
-  runTurn,
-  runTurnWithTools,
-  validateSessionId,
-} from "../src/index";
+await agentLoop.runTurn(conversation, parsed.prompt, modelContext);
 ```
 
-Add a tiny recording model helper:
+The CLI loads project instructions once, converts them to model context, and
+passes that context to the turn. It does not know how the instructions are
+formatted.
+
+## Test ProjectInstructions
+
+Create `tests/project-instructions.test.ts`:
 
 ```ts
-function createRecordingModelClient(responses: string[]): ModelClient & {
-  calls: Array<Parameters<ModelClient["createResponse"]>>;
-} {
-  const calls: Array<Parameters<ModelClient["createResponse"]>> = [];
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "bun:test";
+import { ProjectInstructions } from "../src/index";
 
-  return {
-    calls,
-    async createResponse(...args) {
-      calls.push(args);
+async function withTempProject(
+  callback: (projectRoot: string) => Promise<void>,
+): Promise<void> {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "ty-term-"));
 
-      return responses.shift() ?? "done";
-    },
-  };
+  try {
+    await callback(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
 }
-```
 
-Add these tests:
-
-```ts
-describe("project instructions", () => {
+describe("ProjectInstructions", () => {
   it("loads AGENTS.md from the project root", async () => {
     await withTempProject(async (projectRoot) => {
       await writeFile(
@@ -482,114 +769,182 @@ describe("project instructions", () => {
         "utf8",
       );
 
-      await expect(loadProjectInstructions(projectRoot)).resolves.toBe(
-        "Use small patches.\n",
-      );
-      expect(getProjectInstructionsFilePath(projectRoot)).toBe(
-        path.join(projectRoot, "AGENTS.md"),
+      const instructions = await ProjectInstructions.load(projectRoot);
+
+      expect(instructions.filePath).toBe(path.join(projectRoot, "AGENTS.md"));
+      expect(instructions.text).toBe("Use small patches.\n");
+      expect(instructions.toModelContext().projectInstructions).toBe(
+        "Use small patches.",
       );
     });
   });
 
-  it("returns empty instructions when AGENTS.md is missing", async () => {
+  it("uses empty instructions when AGENTS.md is missing", async () => {
     await withTempProject(async (projectRoot) => {
-      await expect(loadProjectInstructions(projectRoot)).resolves.toBe("");
+      const instructions = await ProjectInstructions.load(projectRoot);
+
+      expect(instructions.text).toBe("");
+      expect(instructions.toModelContext().projectInstructions).toBe("");
     });
   });
+});
+```
 
-  it("passes project instructions to each model call without changing tool behavior", async () => {
-    const modelClient = createRecordingModelClient(["TOOL cwd", "done"]);
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
+These tests prove both edges:
 
-    const conversation = await runTurnWithTools(
-      [],
-      "where am I?",
+```text
+AGENTS.md exists -> content is loaded
+AGENTS.md missing -> context is empty
+```
+
+They do not touch sessions, models, or tools. That is the point of giving
+project instructions their own class.
+
+## Test Model Context Through AgentLoop
+
+Create `tests/model-context.test.ts`:
+
+```ts
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "bun:test";
+import {
+  AgentLoop,
+  AgentMessageFactory,
+  Conversation,
+  CurrentDirectoryTool,
+  JsonlSessionStore,
+  ModelContext,
+  ToolRegistry,
+  buildModelInstructions,
+  type AgentMessage,
+  type ModelClient,
+} from "../src/index";
+
+class RecordingModelClient implements ModelClient {
+  readonly calls: Array<{
+    prompt: string;
+    conversation: AgentMessage[];
+    context: ModelContext;
+  }> = [];
+
+  private readonly responses: string[];
+
+  constructor(responses: string[]) {
+    this.responses = [...responses];
+  }
+
+  async createResponse(
+    prompt: string,
+    conversation: Conversation,
+    context: ModelContext,
+  ): Promise<string> {
+    this.calls.push({
+      prompt,
+      conversation: conversation.toMessages(),
+      context,
+    });
+
+    return this.responses.shift() ?? "done";
+  }
+}
+
+async function withTempProject(
+  callback: (projectRoot: string) => Promise<void>,
+): Promise<void> {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), "ty-term-"));
+
+  try {
+    await callback(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+}
+
+describe("model context", () => {
+  it("passes project instructions to each model call in a tool turn", async () => {
+    const modelClient = new RecordingModelClient(["TOOL cwd", "done"]);
+    const agentLoop = new AgentLoop(
+      new AgentMessageFactory(),
       modelClient,
-      registry,
-      { projectInstructions: "Prefer short answers.\n" },
+      new ToolRegistry([new CurrentDirectoryTool("/learn/harness")]),
     );
+    const conversation = new Conversation();
+    const context = new ModelContext({
+      projectInstructions: "Prefer short answers.",
+    });
 
-    expect(conversation).toEqual([
+    await agentLoop.runTurn(conversation, "where am I?", context);
+
+    expect(conversation.toMessages()).toEqual([
       { role: "user", content: "where am I?" },
       { role: "assistant", content: "TOOL cwd" },
       { role: "tool", name: "cwd", content: "/learn/harness" },
       { role: "assistant", content: "done" },
     ]);
     expect(modelClient.calls).toHaveLength(2);
-    expect(modelClient.calls[0][2]).toEqual({
-      projectInstructions: "Prefer short answers.\n",
-    });
-    expect(modelClient.calls[1][2]).toEqual({
-      projectInstructions: "Prefer short answers.\n",
-    });
+    expect(modelClient.calls[0]?.context).toBe(context);
+    expect(modelClient.calls[1]?.context).toBe(context);
   });
 
-  it("passes project instructions through session turns without persisting them", async () => {
+  it("does not persist project instructions into JSONL session history", async () => {
     await withTempProject(async (projectRoot) => {
-      const modelClient = createRecordingModelClient(["agent noted"]);
-
-      const result = await runSessionTurn({
-        projectRoot,
-        sessionId: "lesson-9",
-        prompt: "hello",
+      const sessionStore = new JsonlSessionStore(projectRoot);
+      const modelClient = new RecordingModelClient(["agent noted"]);
+      const agentLoop = new AgentLoop(
+        new AgentMessageFactory(),
         modelClient,
-        toolRegistry: createToolRegistry([]),
-        projectInstructions: "Follow AGENTS.md.\n",
-      });
+        new ToolRegistry([]),
+      );
+      const conversation = Conversation.fromMessages(
+        await sessionStore.load("lesson-9"),
+      );
+      const startingLength = conversation.length;
 
-      expect(modelClient.calls[0][2]).toEqual({
-        projectInstructions: "Follow AGENTS.md.\n",
-      });
-      expect(result.appendedMessages).toEqual([
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "agent noted" },
-      ]);
+      await agentLoop.runTurn(
+        conversation,
+        "hello",
+        new ModelContext({ projectInstructions: "Follow AGENTS.md." }),
+      );
+      await sessionStore.append(
+        "lesson-9",
+        conversation.messagesSince(startingLength),
+      );
+
       await expect(
-        readFile(getSessionFilePath(projectRoot, "lesson-9"), "utf8"),
+        readFile(sessionStore.getSessionFilePath("lesson-9"), "utf8"),
       ).resolves.toBe(
         '{"role":"user","content":"hello"}\n{"role":"assistant","content":"agent noted"}\n',
       );
     });
   });
 
-  it("adds AGENTS.md content to OpenAI instructions and keeps transcript input separate", async () => {
-    const calls: Array<{
-      model: string;
-      instructions: string;
-      input: string;
-    }> = [];
-    const modelClient = createOpenAIModelClient("test-model", {
-      responses: {
-        async create(options) {
-          calls.push(options);
-
-          return { output_text: "ok" };
-        },
-      },
+  it("adds project instructions to OpenAI instructions", () => {
+    const context = new ModelContext({
+      projectInstructions: "Use repo-local conventions.",
     });
 
-    await runTurnWithTools(
-      [{ role: "assistant", content: "earlier" }],
-      "hello",
-      modelClient,
-      createToolRegistry([]),
-      { projectInstructions: "Use repo-local conventions.\n" },
+    expect(buildModelInstructions(context)).toContain(
+      "Project instructions from AGENTS.md:\nUse repo-local conventions.",
     );
-
-    expect(calls).toEqual([
-      {
-        model: "test-model",
-        instructions: buildModelInstructions("Use repo-local conventions.\n"),
-        input: "assistant: earlier\nuser: hello\nhello",
-      },
-    ]);
   });
 });
 ```
 
-The recording model is better than changing the echo model here. It proves context is passed through without making `TOOL cwd` or `TOOL read_file: ...` harder to parse.
+The recording model is more useful than the echo model here. It proves that
+`AgentLoop` passes the exact same `ModelContext` to both model calls in a tool
+turn.
+
+The session test repeats Chapter 8's storage flow:
+
+```text
+load messages -> run turn -> append messagesSince(startingLength)
+```
+
+Then it inspects the JSONL file. The only persisted records are user and
+assistant messages. Project instructions are absent because they were never
+conversation messages.
 
 ## Run It
 
@@ -624,11 +979,9 @@ user: hello
 assistant: agent heard: hello
 ```
 
-The echo model does not display instructions directly in this verified version. The tests use a recording model to prove instructions are passed to the model context. With OpenAI, the instructions are included in the `instructions` field:
-
-```bash
-OPENAI_API_KEY=... bun run dev -- --openai "summarize the project rules"
-```
+The echo model does not show project instructions. That is intentional. The
+tests prove instructions are passed as context, and the OpenAI client folds that
+context into the provider's `instructions` field.
 
 Run with a session:
 
@@ -642,63 +995,53 @@ Inspect the JSONL:
 cat .ty-term/sessions/lesson-9.jsonl
 ```
 
-The session stores user, assistant, and tool messages. It does not store `AGENTS.md` as its own message.
+Expected shape:
 
-Try the manual tool path:
+```jsonl
+{"role":"user","content":"hello"}
+{"role":"assistant","content":"agent heard: hello"}
+```
+
+No `AGENTS.md` content appears in the session file.
+
+Try manual tool mode:
 
 ```bash
 bun run dev -- --tool read_file AGENTS.md
 ```
 
-Manual tool mode can read the file because `read_file` is a tool, but it skips project instruction loading because no model call happens.
-
-## Verification
-
-The chapter implementation was checked in a scratch package:
-
-```text
-bun test: passed, 36 tests
-bun run build: passed
-CLI smoke: passed
-```
-
-The CLI smoke checks confirmed:
-
-- session create/resume still works
-- `read_file` still works
-- JSONL session output is unchanged
-- manual `--tool cwd` succeeds even when `AGENTS.md` is a directory, proving tool mode does not load instructions
-
-## Reference Pointer
-
-In `pi-mono`, compare this chapter with:
-
-- `pi-mono/packages/coding-agent/src/core/resource-loader.ts`
-- `pi-mono/packages/coding-agent/src/core/system-prompt.ts`
-- `pi-mono/packages/coding-agent/src/cli/args.ts`
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-
-The real project discovers more context files, folds them into a richer system prompt, and includes working directory, tools, date, skills, extensions, and flags such as no-context-file modes. This chapter keeps one idea: read root `AGENTS.md` and include it in every model call.
+Manual tool mode can read `AGENTS.md` because `read_file` reads project files.
+It does not load `ProjectInstructions`, because no model call happens.
 
 ## What We Simplified
 
-We load only `AGENTS.md` from the project root. We do not search parent directories.
+We load only `AGENTS.md` from the project root. We do not search parent
+directories.
 
-We do not support global config files, alternate filenames, or a `--no-context-files` flag.
+We do not support global config files, alternate filenames, or a
+`--no-context-files` flag.
 
-We do not add instructions to session JSONL. Each run loads the current file again.
+We do not add project instructions to JSONL. Each CLI run loads the current
+file again, so editing `AGENTS.md` affects future model calls without rewriting
+old sessions.
 
-We keep model instructions as a plain string, because provider-native structured prompts would distract from the boundary.
+We keep provider instructions as a plain string. Real harnesses often have
+richer prompt assembly, but the lesson here is the boundary:
+
+```text
+ProjectInstructions -> ModelContext -> ModelClient
+```
 
 ## Checkpoint
 
 You now have:
 
-- `AGENTS.md` loading from the project root
-- empty instructions when the file is missing
-- model context passed through normal turns
-- model context passed through session turns
-- OpenAI instructions that preserve the tool protocol
-- no changes to the JSONL session format
+- `ProjectInstructions` loading `AGENTS.md`
+- empty model context when the file is missing
+- `ModelContext` passed through `AgentLoop`
+- `OpenAIModelClient` using context without loading files
+- `JsonlSessionStore` still persisting only conversation messages
+- `cli.ts` composing project, session, tools, model, and agent objects
 
-The harness now has memory and project-specific guidance. Chapter 10 turns the one-shot CLI into a tiny interactive loop.
+The harness now has memory and project-specific guidance. Chapter 10 moves the
+remaining repeated terminal behavior out of `cli.ts` and into `InteractiveLoop`.

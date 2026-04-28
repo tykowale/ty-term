@@ -1,175 +1,193 @@
 # Chapter 5: Execute a Bash Tool
 
-## Where We Are
+Chapter 4 gave the harness a tool boundary:
 
-At the end of Chapter 4, `ty-term` has a tool boundary:
+```text
+Tool + ToolRegistry + CurrentDirectoryTool
+```
 
-- `ToolDefinition`
-- `ToolRegistry`
-- `createCurrentDirectoryTool`
-- `executeTool`
-- CLI support for `--tool cwd`
-- normal prompts still return `agent heard: ...`
+That boundary was intentionally modest. The CLI could ask the registry to run
+one safe tool:
 
-That is enough structure to add the first real external action.
+```bash
+bun run dev -- --tool cwd
+```
 
-This chapter adds a `bash` tool, but it is still manually invoked:
+and the normal prompt path still went through `AgentLoop`:
+
+```bash
+bun run dev -- "hello tools"
+```
+
+What the harness still cannot do is cross from TypeScript into an external
+machine action. A coding agent eventually needs to run commands. This chapter
+adds that capability, but it keeps the shape conservative:
 
 ```bash
 bun run dev -- --tool bash "pwd"
 ```
 
-The model does not choose commands yet. Running shell commands is powerful and risky, so this chapter keeps the command path explicit and inspectable.
-
-## Learning Objective
-
-Learn how a coding harness crosses from internal TypeScript objects into external machine action.
-
-The new boundary is:
-
-```ts
-executeCommand(command, options?)
-```
-
-It runs a shell command with Node built-ins, captures `stdout`, `stderr`, and the exit code, then returns a controlled string.
-
-By the end of the chapter, the harness can run:
-
-```bash
-bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
-```
-
-and print a structured tool result.
-
-## Build The Slice
-
-Change three files:
-
-- `src/index.ts`
-- `src/cli.ts`
-- `tests/agent.test.ts`
-
-No new dependencies. We use `node:child_process`.
-
-The new behavior should preserve the Chapter 4 prompt contract:
+The model does not choose commands yet. The conversation does not contain tool
+results yet. Chapter 6 owns that connection. Chapter 5 only teaches where
+command execution belongs:
 
 ```text
-assistant: agent heard: hello
+cli.ts composes dependencies.
+ToolRegistry dispatches named tools.
+BashTool owns process execution.
+AgentLoop does not execute commands directly.
 ```
 
-## `src/index.ts`
+The file layout grows by one tool:
+
+```text
+src/
+  agent/
+    AgentLoop.ts
+    AgentMessage.ts
+    AgentMessageFactory.ts
+    Conversation.ts
+  model/
+    EchoModelClient.ts
+    ModelClient.ts
+    OpenAIModelClient.ts
+  tools/
+    BashTool.ts
+    CurrentDirectoryTool.ts
+    Tool.ts
+    ToolRegistry.ts
+  cli.ts
+  index.ts
+tests/
+  agent-loop.test.ts
+  bash-tool.test.ts
+  tool-registry.test.ts
+```
+
+The new visible behavior is:
+
+```text
+$ bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
+tool bash:
+exit code: 0
+stdout:
+ok
+stderr:
+```
+
+## Why Bash Is A Tool Object
+
+Chapter 4's `Tool` interface was deliberately small:
+
+```ts
+export interface Tool {
+  readonly name: string;
+  readonly description: string;
+
+  execute(input?: string): Promise<string>;
+}
+```
+
+That is enough for bash. A bash command is just input to a tool named `bash`,
+and the result is text the harness can print.
+
+The tempting shortcut is to put a helper in `src/index.ts`:
+
+```ts
+executeCommand(command);
+```
+
+That helper would work, but it would also blur ownership. If command execution
+is a top-level helper, every caller can start using it directly. Soon the CLI,
+the agent loop, tests, and future session code all know too much about process
+execution.
+
+Instead, this chapter makes command execution part of `BashTool`:
+
+```text
+BashTool implements Tool.
+ToolRegistry executes BashTool by name.
+Callers pass command text through ToolRegistry.execute("bash", commandText).
+```
+
+That keeps the dangerous capability behind the same dispatch boundary as every
+other tool.
+
+## The Command Result Shape
+
+Before writing the class, choose the output format. The command may succeed,
+fail, print to stdout, print to stderr, or time out. The tool should return one
+stable text block for all of those cases:
+
+```text
+exit code: 0
+stdout:
+ok
+stderr:
+```
+
+For a failing command:
+
+```text
+exit code: 7
+stdout:
+
+stderr:
+bad
+```
+
+The shape is plain on purpose. Chapter 6 can append this string to a
+conversation as a tool result without inventing a richer event system yet.
+
+## The Bash Tool
+
+Create `src/tools/BashTool.ts`:
 
 ```ts
 import { spawn } from "node:child_process";
-import OpenAI from "openai";
-
-export type AgentRole = "user" | "assistant";
-
-export interface AgentMessage {
-  role: AgentRole;
-  content: string;
-}
-
-export type Conversation = AgentMessage[];
-
-export interface ModelClient {
-  createResponse(prompt: string, conversation: Conversation): Promise<string>;
-}
-
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  execute(input?: string): Promise<string>;
-}
-
-export type ToolRegistry = ReadonlyMap<string, ToolDefinition>;
+import type { Tool } from "./Tool";
 
 export interface CommandOptions {
-  cwd?: string;
-  timeoutMs?: number;
+  readonly cwd?: string;
+  readonly timeoutMs?: number;
 }
 
-export function createUserMessage(content: string): AgentMessage {
-  return { role: "user", content };
+export interface CommandResult {
+  readonly exitCode: number | "timeout";
+  readonly stdout: string;
+  readonly stderr: string;
 }
 
-export function createAssistantMessage(content: string): AgentMessage {
-  return { role: "assistant", content };
-}
-
-export function createEchoModelClient(): ModelClient {
-  return {
-    async createResponse(prompt: string): Promise<string> {
-      return `agent heard: ${prompt}`;
-    },
-  };
-}
-
-export function createOpenAIModelClient(
-  model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
-): ModelClient {
-  const client = new OpenAI();
-
-  return {
-    async createResponse(
-      prompt: string,
-      conversation: Conversation,
-    ): Promise<string> {
-      const response = await client.responses.create({
-        model,
-        input: [
-          ...conversation.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
-          { role: "user", content: prompt },
-        ],
-      });
-
-      return response.output_text;
-    },
-  };
-}
-
-export async function runTurn(
-  conversation: Conversation,
-  prompt: string,
-  modelClient: ModelClient,
-): Promise<Conversation> {
-  const userMessage = createUserMessage(prompt);
-  const assistantContent = await modelClient.createResponse(
-    prompt,
-    conversation,
-  );
-  const assistantMessage = createAssistantMessage(assistantContent);
-
-  return [...conversation, userMessage, assistantMessage];
-}
-
-export function renderTranscript(conversation: Conversation): string {
-  return conversation
-    .map((message) => `${message.role}: ${message.content}`)
-    .join("\n");
-}
-
-export function createCurrentDirectoryTool(options?: {
-  cwd?: string;
-}): ToolDefinition {
-  const cwd = options?.cwd ?? process.cwd();
-
-  return {
-    name: "cwd",
-    description: "Return the current working directory.",
-    async execute() {
-      return cwd;
-    },
-  };
-}
-
-export async function executeCommand(
+export type CommandRunner = (
   command: string,
   options?: CommandOptions,
-): Promise<string> {
+) => Promise<CommandResult>;
+
+export class BashTool implements Tool {
+  public readonly name = "bash";
+  public readonly description =
+    "Run a bash command and return exit code, stdout, and stderr.";
+
+  constructor(
+    private readonly options: CommandOptions = {},
+    private readonly runCommand: CommandRunner = runShellCommand,
+  ) {}
+
+  async execute(input?: string): Promise<string> {
+    if (!input || input.trim().length === 0) {
+      throw new Error("bash tool requires a command.");
+    }
+
+    const result = await this.runCommand(input, this.options);
+
+    return formatCommandResult(result);
+  }
+}
+
+export async function runShellCommand(
+  command: string,
+  options?: CommandOptions,
+): Promise<CommandResult> {
   const timeoutMs = options?.timeoutMs ?? 5000;
 
   return new Promise((resolve, reject) => {
@@ -207,95 +225,115 @@ export async function executeCommand(
     child.on("close", (code) => {
       clearTimeout(timeout);
 
-      const exitCode = timedOut ? "timeout" : String(code ?? 0);
-
-      resolve(
-        [
-          `exit code: ${exitCode}`,
-          "stdout:",
-          stdout.trimEnd(),
-          "stderr:",
-          stderr.trimEnd(),
-        ].join("\n"),
-      );
+      resolve({
+        exitCode: timedOut ? "timeout" : (code ?? 0),
+        stdout,
+        stderr,
+      });
     });
   });
 }
 
-export function createBashTool(options?: CommandOptions): ToolDefinition {
-  return {
-    name: "bash",
-    description: "Run a bash command and return exit code, stdout, and stderr.",
-    async execute(input?: string) {
-      if (!input || input.trim().length === 0) {
-        throw new Error("bash tool requires a command.");
-      }
-
-      return executeCommand(input, options);
-    },
-  };
-}
-
-export function createToolRegistry(
-  tools: readonly ToolDefinition[],
-): ToolRegistry {
-  const registry = new Map<string, ToolDefinition>();
-
-  for (const tool of tools) {
-    if (registry.has(tool.name)) {
-      throw new Error(`Duplicate tool name: ${tool.name}`);
-    }
-
-    registry.set(tool.name, tool);
-  }
-
-  return registry;
-}
-
-export function getTool(
-  registry: ToolRegistry,
-  name: string,
-): ToolDefinition | undefined {
-  return registry.get(name);
-}
-
-export async function executeTool(
-  registry: ToolRegistry,
-  name: string,
-  input?: string,
-): Promise<string> {
-  const tool = getTool(registry, name);
-
-  if (!tool) {
-    throw new Error(`Unknown tool: ${name}`);
-  }
-
-  return tool.execute(input);
+export function formatCommandResult(result: CommandResult): string {
+  return [
+    `exit code: ${result.exitCode}`,
+    "stdout:",
+    result.stdout.trimEnd(),
+    "stderr:",
+    result.stderr.trimEnd(),
+  ].join("\n");
 }
 ```
 
-## `src/cli.ts`
+Read this file by ownership.
+
+`BashTool` owns the tool contract. It has the tool name, the description, input
+validation, and the conversion from command result to tool output.
+
+`runShellCommand()` owns the Node process details. It uses `spawn()` with
+`shell: true` so the CLI can pass familiar command strings:
+
+```bash
+--tool bash "pwd"
+```
+
+The tradeoff is safety. A shell string can run destructive commands. That is
+why this chapter keeps bash manually invoked. No model can ask for bash yet.
+
+`formatCommandResult()` owns the text representation. Keeping formatting in one
+place lets tests assert the result shape without depending on child process
+events.
+
+The constructor accepts a `CommandRunner`:
 
 ```ts
-#!/usr/bin/env node
+constructor(
+  private readonly options: CommandOptions = {},
+  private readonly runCommand: CommandRunner = runShellCommand,
+) {}
+```
+
+That is not extra architecture for its own sake. It gives tests a clean way to
+exercise `BashTool` without spawning a process, while still letting the real CLI
+use the real shell runner.
+
+## The Barrel File Still Stays Boring
+
+`src/index.ts` should export `BashTool`; it should not implement bash:
+
+```ts
+export { AgentLoop } from "./agent/AgentLoop";
+export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
+export { AgentMessageFactory } from "./agent/AgentMessageFactory";
+export { Conversation } from "./agent/Conversation";
+export { EchoModelClient } from "./model/EchoModelClient";
+export type { ModelClient } from "./model/ModelClient";
+export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export {
+  BashTool,
+  formatCommandResult,
+  runShellCommand,
+  type CommandOptions,
+  type CommandResult,
+  type CommandRunner,
+} from "./tools/BashTool";
+export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+export type { Tool } from "./tools/Tool";
+export { ToolRegistry } from "./tools/ToolRegistry";
+```
+
+This follows the Chapter 4 rule: `index.ts` is a public import surface, not a
+place for domain behavior.
+
+## The CLI Composes The New Tool
+
+The CLI already has a manual tool path from Chapter 4:
+
+```text
+--tool cwd
+```
+
+Chapter 5 keeps that path and registers one more tool:
+
+```ts
+#!/usr/bin/env bun
 
 import {
-  type Conversation,
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createOpenAIModelClient,
-  createToolRegistry,
-  executeTool,
-  renderTranscript,
-  runTurn,
+  AgentLoop,
+  AgentMessageFactory,
+  BashTool,
+  Conversation,
+  CurrentDirectoryTool,
+  EchoModelClient,
+  OpenAIModelClient,
+  ToolRegistry,
 } from "./index";
 
 interface ParsedArgs {
-  useOpenAI: boolean;
-  toolName?: string;
-  toolInput?: string;
-  prompt: string;
+  readonly useOpenAI: boolean;
+  readonly toolName?: string;
+  readonly toolInput?: string;
+  readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -321,25 +359,19 @@ function parseArgs(args: string[]): ParsedArgs {
     promptParts.push(arg);
   }
 
-  return {
-    useOpenAI,
-    toolName,
-    toolInput,
-    prompt: promptParts.join(" "),
-  };
+  return { useOpenAI, toolName, toolInput, prompt: promptParts.join(" ") };
 }
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
 
   if (parsed.toolName) {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool(),
-      createBashTool(),
+    const toolRegistry = new ToolRegistry([
+      new CurrentDirectoryTool(),
+      new BashTool(),
     ]);
 
-    const result = await executeTool(
-      registry,
+    const result = await toolRegistry.execute(
       parsed.toolName,
       parsed.toolInput,
     );
@@ -350,6 +382,8 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error("       bun run dev -- --tool cwd");
+    console.error('       bun run dev -- --tool bash "pwd"');
     process.exit(1);
   }
 
@@ -358,18 +392,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const messageFactory = new AgentMessageFactory();
   const modelClient = parsed.useOpenAI
-    ? createOpenAIModelClient()
-    : createEchoModelClient();
+    ? new OpenAIModelClient()
+    : new EchoModelClient();
+  const agentLoop = new AgentLoop(messageFactory, modelClient);
+  const conversation = new Conversation();
 
-  const conversation: Conversation = [];
-  const nextConversation = await runTurn(
-    conversation,
-    parsed.prompt,
-    modelClient,
-  );
+  await agentLoop.runTurn(conversation, parsed.prompt);
 
-  process.stdout.write(`${renderTranscript(nextConversation)}\n`);
+  console.log(conversation.renderTranscript());
 }
 
 main().catch((error: unknown) => {
@@ -379,120 +411,143 @@ main().catch((error: unknown) => {
 });
 ```
 
-## `tests/agent.test.ts`
+Two details are worth calling out.
+
+First, tool input becomes the rest of the command line:
+
+```ts
+toolInput = args.slice(index + 2).join(" ");
+```
+
+That lets this command arrive as one string:
+
+```bash
+bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
+```
+
+Second, the CLI still does not execute bash. It only composes the registry and
+asks for dispatch:
+
+```ts
+const result = await toolRegistry.execute(parsed.toolName, parsed.toolInput);
+```
+
+That line is the chapter's architectural checkpoint. If future code bypasses
+the registry and calls `runShellCommand()` from `cli.ts` or `AgentLoop`, the
+boundary has leaked.
+
+## Tests For Command Execution
+
+Keep the Chapter 4 registry tests. They still prove duplicate-name validation,
+unknown-tool errors, and registry dispatch.
+
+Add focused bash tests in `tests/bash-tool.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
 import {
-  createBashTool,
-  createCurrentDirectoryTool,
-  createEchoModelClient,
-  createToolRegistry,
-  executeCommand,
-  executeTool,
-  getTool,
-  renderTranscript,
-  runTurn,
-  type Conversation,
+  BashTool,
+  ToolRegistry,
+  formatCommandResult,
+  runShellCommand,
+  type CommandRunner,
 } from "../src/index";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;
 }
 
-describe("agent turn", () => {
-  it("keeps the chapter 3 prompt contract stable", async () => {
-    const conversation = await runTurn([], "hello", createEchoModelClient());
+describe("BashTool", () => {
+  it("uses the injected command runner", async () => {
+    const runCommand: CommandRunner = async (command) => ({
+      exitCode: 0,
+      stdout: `ran ${command}`,
+      stderr: "",
+    });
 
-    expect(renderTranscript(conversation)).toBe(
-      "user: hello\nassistant: agent heard: hello",
+    const tool = new BashTool({ timeoutMs: 1000 }, runCommand);
+
+    await expect(tool.execute("pwd")).resolves.toBe(
+      ["exit code: 0", "stdout:", "ran pwd", "stderr:", ""].join("\n"),
     );
   });
 
-  it("does not mutate the previous conversation", async () => {
-    const original: Conversation = [{ role: "user", content: "earlier" }];
+  it("rejects empty input", async () => {
+    const tool = new BashTool();
 
-    await runTurn(original, "next", createEchoModelClient());
-
-    expect(original).toEqual([{ role: "user", content: "earlier" }]);
-  });
-});
-
-describe("tool registry", () => {
-  it("stores tools by name", () => {
-    const cwdTool = createCurrentDirectoryTool({ cwd: "/learn/harness" });
-    const registry = createToolRegistry([cwdTool]);
-
-    expect(getTool(registry, "cwd")).toBe(cwdTool);
-  });
-
-  it("rejects duplicate tool names", () => {
-    expect(() =>
-      createToolRegistry([
-        createCurrentDirectoryTool({ cwd: "/one" }),
-        createCurrentDirectoryTool({ cwd: "/two" }),
-      ]),
-    ).toThrow("Duplicate tool name: cwd");
-  });
-
-  it("executes a named tool", async () => {
-    const registry = createToolRegistry([
-      createCurrentDirectoryTool({ cwd: "/learn/harness" }),
-    ]);
-
-    await expect(executeTool(registry, "cwd")).resolves.toBe("/learn/harness");
-  });
-
-  it("passes input to a named tool", async () => {
-    const registry = createToolRegistry([createBashTool({ timeoutMs: 1000 })]);
-
-    await expect(
-      executeTool(registry, "bash", nodeCommand("process.stdout.write('ok')")),
-    ).resolves.toContain("stdout:\nok");
-  });
-
-  it("reports unknown tools", async () => {
-    const registry = createToolRegistry([]);
-
-    await expect(executeTool(registry, "missing")).rejects.toThrow(
-      "Unknown tool: missing",
+    await expect(tool.execute()).rejects.toThrow(
+      "bash tool requires a command.",
+    );
+    await expect(tool.execute("   ")).rejects.toThrow(
+      "bash tool requires a command.",
     );
   });
 });
 
-describe("bash command execution", () => {
+describe("runShellCommand", () => {
   it("captures stdout with an exit code", async () => {
-    const result = await executeCommand(
+    const result = await runShellCommand(
       nodeCommand("process.stdout.write('ok')"),
       { timeoutMs: 1000 },
     );
 
-    expect(result).toContain("exit code: 0");
-    expect(result).toContain("stdout:\nok");
-    expect(result).toContain("stderr:");
+    expect(result).toEqual({ exitCode: 0, stdout: "ok", stderr: "" });
   });
 
   it("captures stderr and nonzero exit codes", async () => {
-    const result = await executeCommand(
+    const result = await runShellCommand(
       nodeCommand("process.stderr.write('bad'); process.exit(7)"),
       { timeoutMs: 1000 },
     );
 
-    expect(result).toContain("exit code: 7");
-    expect(result).toContain("stderr:\nbad");
+    expect(result).toEqual({ exitCode: 7, stdout: "", stderr: "bad" });
   });
+});
 
-  it("rejects empty bash tool input", async () => {
-    const bashTool = createBashTool();
+describe("formatCommandResult", () => {
+  it("renders a stable tool result", () => {
+    expect(
+      formatCommandResult({ exitCode: 7, stdout: "", stderr: "bad\n" }),
+    ).toBe(["exit code: 7", "stdout:", "", "stderr:", "bad"].join("\n"));
+  });
+});
 
-    await expect(bashTool.execute()).rejects.toThrow(
-      "bash tool requires a command.",
+describe("ToolRegistry with BashTool", () => {
+  it("executes bash through the registry", async () => {
+    const runCommand: CommandRunner = async () => ({
+      exitCode: 0,
+      stdout: "ok",
+      stderr: "",
+    });
+    const registry = new ToolRegistry([
+      new BashTool({ timeoutMs: 1000 }, runCommand),
+    ]);
+
+    await expect(registry.execute("bash", "pwd")).resolves.toContain(
+      "stdout:\nok",
     );
   });
 });
 ```
 
+These tests separate three concerns:
+
+- `BashTool` validates input and adapts command results to the `Tool` contract.
+- `runShellCommand()` proves the real process boundary with deterministic Node
+  commands.
+- `ToolRegistry` remains the only dispatch path callers need.
+
+The test command uses `process.execPath` instead of assuming `node` is on the
+reader's `PATH`. That makes the test more portable while still exercising a
+real child process.
+
 ## Try It
+
+Install dependencies if needed:
+
+```bash
+bun install
+```
 
 Build:
 
@@ -519,6 +574,19 @@ user: hello bash
 assistant: agent heard: hello bash
 ```
 
+Run the existing safe tool:
+
+```bash
+bun run dev -- --tool cwd
+```
+
+Expected shape:
+
+```text
+tool cwd:
+/path/to/ty-term
+```
+
 Run the new bash tool:
 
 ```bash
@@ -535,7 +603,7 @@ stdout:
 stderr:
 ```
 
-Run a deterministic Node command:
+Run a deterministic command:
 
 ```bash
 bun run dev -- --tool bash "node -e \"process.stdout.write('ok')\""
@@ -568,104 +636,62 @@ stderr:
 bad
 ```
 
-## How It Works
-
-Chapter 4 taught the tool boundary. Chapter 5 makes that boundary touch the operating system.
-
-The core function is:
-
-```ts
-export async function executeCommand(
-  command: string,
-  options?: CommandOptions,
-): Promise<string>;
-```
-
-It does not know about the CLI, the model, or conversations. It only knows how to run one command and turn the result into a stable string.
-
-The implementation uses `spawn` with `shell: true`:
-
-```ts
-const child = spawn(command, {
-  cwd: options?.cwd,
-  shell: true,
-  stdio: ["ignore", "pipe", "pipe"],
-});
-```
-
-That lets the CLI pass a familiar command string:
+Run bash with no command:
 
 ```bash
---tool bash "pwd"
+bun run dev -- --tool bash
 ```
 
-The tradeoff is safety. Shell strings can run destructive commands. That is why this chapter keeps bash manual. The model cannot produce or execute shell commands yet.
-
-The output is intentionally plain:
+Expected shape:
 
 ```text
-exit code: 0
-stdout:
-...
-stderr:
-...
+bash tool requires a command.
 ```
 
-That gives future chapters something easy to put into a transcript when tool results become part of the agent loop.
+The process exits non-zero because the CLI catch block turns the thrown tool
+error into stderr.
 
-The timeout is small and boring on purpose:
+## How It Works
 
-```ts
-const timeoutMs = options?.timeoutMs ?? 5000;
+The new tool path has this data flow:
+
+```text
+cli.ts
+  -> new ToolRegistry([new CurrentDirectoryTool(), new BashTool()])
+  -> toolRegistry.execute("bash", commandText)
+  -> BashTool.execute(commandText)
+  -> runShellCommand(commandText)
+  -> formatCommandResult(...)
+  -> print "tool bash:\n..."
 ```
 
-Tests can inject a shorter timeout, but we are not building a full process manager. No streaming, cancellation UI, approvals, sandboxing, or background jobs yet.
+The existing prompt path stays unchanged:
 
-`createBashTool` adapts command execution into the existing `ToolDefinition` shape:
-
-```ts
-export function createBashTool(options?: CommandOptions): ToolDefinition {
-  return {
-    name: "bash",
-    description: "Run a bash command and return exit code, stdout, and stderr.",
-    async execute(input?: string) {
-      if (!input || input.trim().length === 0) {
-        throw new Error("bash tool requires a command.");
-      }
-
-      return executeCommand(input, options);
-    },
-  };
-}
+```text
+cli.ts
+  -> new AgentMessageFactory()
+  -> new EchoModelClient() or new OpenAIModelClient()
+  -> new AgentLoop(messageFactory, modelClient)
+  -> new Conversation()
+  -> await agentLoop.runTurn(conversation, prompt)
+  -> conversation.renderTranscript()
 ```
 
-The CLI also learns one new parsing rule: after `--tool <name>`, the remaining arguments become tool input.
+Those paths are still separate. That separation is not a limitation of the
+architecture. It is the chapter boundary.
 
-That means this works:
+If bash were wired into `AgentLoop` now, the loop would need answers to
+questions we have not taught yet:
 
-```bash
-bun run dev -- --tool bash "pwd"
-```
+- How does the model request a tool?
+- What text format does the model use?
+- How do we parse that request?
+- What message records the tool result?
+- Does the model get a second response after the tool runs?
+- Should all tools be available to the model?
 
-and this still works:
-
-```bash
-bun run dev -- "hello"
-```
-
-## Reference Note
-
-In `pi-mono`, compare this slice with:
-
-- `pi-mono/packages/coding-agent/src/core/bash-executor.ts`
-- `pi-mono/packages/coding-agent/src/core/agent-session.ts`
-- `pi-mono/packages/agent/src/agent-loop.ts`
-
-A production coding harness has more machinery around command execution: approval, cancellation, streaming output, working-directory control, tool-call messages, and error recovery.
-
-This chapter keeps only the essential idea:
-
-> external actions should sit behind a narrow function boundary before they become part of the agent loop.
+Chapter 6 answers those questions. Chapter 5 only gives Chapter 6 a real tool
+to call.
 
 ## Simplifications
 
@@ -673,25 +699,45 @@ This chapter intentionally does not:
 
 - let the model choose bash commands
 - add tool results to the conversation
-- stream command output
-- prompt for approval
+- prompt for command approval
 - sandbox commands
+- stream command output
 - support interactive commands
 - preserve long-running processes
 - parse structured JSON tool input
+- build a full process manager
 
 The timeout is a learning guardrail, not a complete safety system.
 
-## Handoff to Chapter 6
+The most important safety decision is architectural: bash remains behind a
+named tool object and a registry dispatch boundary. That does not make shell
+commands safe, but it gives future chapters one place to add policy.
 
-Chapter 6 can connect the model loop to the tool boundary.
+## Handoff To Chapter 6
+
+Chapter 5 gives the harness a real external action:
+
+```text
+ToolRegistry.execute("bash", commandText) -> BashTool -> shell process
+```
+
+Chapter 6 can now connect the model loop to the tool boundary.
 
 The next slice should:
 
 - teach the model what tools exist
 - parse a simple model-produced tool request
-- execute only registered tools
+- execute only registered tools through `ToolRegistry`
 - append the tool result to the conversation
+- call the model again with that result available
 - keep bash gated behind a visible, conservative rule
 
-Chapter 5 gave us real command execution. Chapter 6 decides when the agent is allowed to ask for it.
+Chapter 6 should preserve the continuity rule:
+
+```text
+AgentLoop orchestrates model/tool turns.
+Conversation stores and renders messages.
+ToolRegistry dispatches tools.
+BashTool owns command execution.
+cli.ts only composes dependencies and handles process I/O.
+```
