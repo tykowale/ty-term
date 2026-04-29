@@ -147,7 +147,7 @@ transcript rendering. Persistence needs two more safe access points:
 Update `src/agent/conversation.ts`:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -225,7 +225,7 @@ into the object that owns behavior.
 Create `src/session/session-store.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export interface SessionStore {
   load(sessionId: string): Promise<AgentMessage[]>;
@@ -256,9 +256,9 @@ Create `src/session/jsonl-session-store.ts`:
 ```ts
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "../agent/agent-message";
-import { resolveProjectRoot } from "../tools/read-file-tool";
-import type { SessionStore } from "./session-store";
+import type { AgentMessage } from "@/agent/agent-message";
+import { resolveProjectRoot } from "@/tools/read-file-tool";
+import type { SessionStore } from "@/session/session-store";
 
 export class JsonlSessionStore implements SessionStore {
   private readonly sessionsDirectory: string;
@@ -432,18 +432,18 @@ is stored as one physical JSONL line.
 Update `src/index.ts` so it stays a barrel:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/jsonl-session-store";
-export type { SessionStore } from "./session/session-store";
+} from "@/session/jsonl-session-store";
+export type { SessionStore } from "@/session/session-store";
 export {
   BashTool,
   formatCommandResult,
@@ -451,16 +451,19 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/read-file-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
-export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
+} from "@/tools/read-file-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
+export {
+  ToolRequestParser,
+  type ToolRequest,
+} from "@/tools/tool-request-parser";
 ```
 
 This file still should not contain `loadSessionMessages()`,
@@ -496,7 +499,7 @@ import {
   ToolRegistry,
   resolveProjectRoot,
   validateSessionId,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -672,7 +675,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
-import { JsonlSessionStore, validateSessionId } from "../src/index";
+import { JsonlSessionStore, validateSessionId } from "@/index";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,
@@ -791,7 +794,7 @@ import {
   EchoModelClient,
   JsonlSessionStore,
   ToolRegistry,
-} from "../src/index";
+} from "@/index";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,

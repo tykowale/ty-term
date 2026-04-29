@@ -148,7 +148,7 @@ Create `src/tools/read-file-tool.ts`:
 ```ts
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Tool } from "./tool";
+import type { Tool } from "@/tools/tool";
 
 export class ReadFileTool implements Tool {
   public readonly name = "read_file";
@@ -253,8 +253,8 @@ read request when the prompt asks to read a file.
 `src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -308,8 +308,8 @@ knows the new text protocol.
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -395,13 +395,13 @@ It does not own file paths.
 `src/index.ts` remains a public import surface:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
 export {
   BashTool,
   formatCommandResult,
@@ -409,16 +409,19 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/read-file-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
-export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
+} from "@/tools/read-file-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
+export {
+  ToolRequestParser,
+  type ToolRequest,
+} from "@/tools/tool-request-parser";
 ```
 
 There is still no `createReadFileTool()`, no `parseToolRequest()`, and no
@@ -448,7 +451,7 @@ import {
   ReadFileTool,
   ToolRegistry,
   resolveProjectRoot,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -587,7 +590,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
-import { ReadFileTool, resolveProjectFilePath } from "../src/index";
+import { ReadFileTool, resolveProjectFilePath } from "@/index";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,
@@ -694,7 +697,7 @@ import {
   ToolRegistry,
   type AgentMessage,
   type ModelClient,
-} from "../src/index";
+} from "@/index";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,

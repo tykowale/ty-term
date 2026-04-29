@@ -1,4 +1,4 @@
-import { type AgentMessage } from "./agent-message";
+import { type AgentMessage } from "@/agent/agent-message";
 
 export class AgentMessageFactory {
   createUserMessage(content: string): AgentMessage {

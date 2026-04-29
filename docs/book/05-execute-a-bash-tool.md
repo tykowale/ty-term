@@ -145,7 +145,7 @@ Create `src/tools/bash-tool.ts`:
 
 ```ts
 import { spawn } from "node:child_process";
-import type { Tool } from "./tool";
+import type { Tool } from "@/tools/tool";
 
 export interface CommandOptions {
   readonly cwd?: string;
@@ -282,13 +282,13 @@ use the real shell runner.
 `src/index.ts` should export `BashTool`; it should not implement bash:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
 export {
   BashTool,
   formatCommandResult,
@@ -296,10 +296,10 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
 ```
 
 This follows the Chapter 4 rule: `index.ts` is a public import surface, not a
@@ -327,7 +327,7 @@ import {
   EchoModelClient,
   OpenAIModelClient,
   ToolRegistry,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -451,7 +451,7 @@ import {
   formatCommandResult,
   runShellCommand,
   type CommandRunner,
-} from "../src/index";
+} from "@/index";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;

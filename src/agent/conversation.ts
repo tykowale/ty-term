@@ -1,5 +1,5 @@
-import { type AgentMessage } from "./agent-message";
-import { AgentMessageFactory } from "./agent-message-factory";
+import { type AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
 
 export class Conversation {
   private readonly messages: AgentMessage[];

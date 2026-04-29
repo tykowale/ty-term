@@ -109,7 +109,7 @@ The revised `Conversation` keeps the storage methods from Chapter 2 and replaces
 `runTurn()` with `appendMessages()`:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -151,7 +151,7 @@ That is orchestration, so it belongs one level up.
 The model boundary starts with an interface in `src/model/model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export interface ModelClient {
   createResponse(messages: AgentMessage[]): Promise<string>;
@@ -186,8 +186,8 @@ access, provider availability, or stable model output.
 So the first implementation is `src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -214,8 +214,8 @@ The second implementation is `src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -262,9 +262,9 @@ Now we can name the object that owns a turn.
 `src/agent/agent-loop.ts`:
 
 ```ts
-import { AgentMessageFactory } from "./agent-message-factory";
-import type { Conversation } from "./conversation";
-import type { ModelClient } from "../model/model-client";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelClient } from "@/model/model-client";
 
 export class AgentLoop {
   constructor(
@@ -316,13 +316,13 @@ The loop also does not render anything. Rendering still belongs to
 implementing behavior:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
 ```
 
 This rule matters more as the book grows. `index.ts` is a public import surface,
@@ -343,7 +343,7 @@ import {
   Conversation,
   EchoModelClient,
   OpenAIModelClient,
-} from "./index";
+} from "@/index";
 
 const args = process.argv.slice(2);
 const useOpenAI = args.includes("--openai");
@@ -407,7 +407,7 @@ import {
   EchoModelClient,
   type AgentMessage,
   type ModelClient,
-} from "../src/index";
+} from "@/index";
 
 class RecordingModelClient implements ModelClient {
   public receivedMessages: AgentMessage[] = [];

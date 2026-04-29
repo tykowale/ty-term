@@ -126,7 +126,7 @@ has to remember the exact shape.
 Instead, create `src/agent/agent-message-factory.ts`:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export class AgentMessageFactory {
   createUserMessage(content: string): AgentMessage {
@@ -173,8 +173,8 @@ Now we can name the central object for the chapter. A `Conversation` owns an
 ordered list of messages:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
-import { AgentMessageFactory } from "./agent-message-factory";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -287,8 +287,8 @@ from the terminal, print to stdout, call a model, or persist a session.
 Full file:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
-import { AgentMessageFactory } from "./agent-message-factory";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -333,15 +333,15 @@ Chapter 1 put the temporary helper in `src/index.ts`. This chapter turns
 `src/index.ts` into a barrel:
 
 ```ts
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
 ```
 
 A barrel file gives callers one stable import path:
 
 ```ts
-import { AgentMessageFactory, Conversation } from "./index";
+import { AgentMessageFactory, Conversation } from "@/index";
 ```
 
 But it should not collect behavior. If `index.ts` starts accumulating message
@@ -361,7 +361,7 @@ The command-line file remains a process adapter. Update `src/cli.ts`:
 ```ts
 #!/usr/bin/env bun
 
-import { AgentMessageFactory, Conversation } from "./index";
+import { AgentMessageFactory, Conversation } from "@/index";
 
 const prompt = process.argv.slice(2).join(" ");
 const messageFactory = new AgentMessageFactory();
@@ -397,11 +397,7 @@ Add `tests/conversation.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import {
-  AgentMessageFactory,
-  Conversation,
-  type AgentMessage,
-} from "../src/index";
+import { AgentMessageFactory, Conversation, type AgentMessage } from "@/index";
 
 describe("AgentMessageFactory", () => {
   it("creates user and assistant messages", () => {

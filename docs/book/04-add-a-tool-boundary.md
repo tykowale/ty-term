@@ -130,7 +130,7 @@ The safest possible tool is one that reports the current working directory.
 `src/tools/current-directory-tool.ts`:
 
 ```ts
-import type { Tool } from "./tool";
+import type { Tool } from "@/tools/tool";
 
 export class CurrentDirectoryTool implements Tool {
   public readonly name = "cwd";
@@ -165,7 +165,7 @@ behavior being tested is tool dispatch.
 Now add `src/tools/tool-registry.ts`:
 
 ```ts
-import type { Tool } from "./tool";
+import type { Tool } from "@/tools/tool";
 
 export class ToolRegistry {
   private readonly toolsByName = new Map<string, Tool>();
@@ -225,16 +225,16 @@ is a good place to teach that habit: expose behavior, not internal storage.
 `src/index.ts` should export the new objects, not implement them:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
 ```
 
 This is the only role `index.ts` gets. It is a public import surface, not a
@@ -274,7 +274,7 @@ import {
   EchoModelClient,
   OpenAIModelClient,
   ToolRegistry,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -383,7 +383,7 @@ Add focused tests for the tool boundary in `tests/tool-registry.test.ts`:
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import { CurrentDirectoryTool, ToolRegistry, type Tool } from "../src/index";
+import { CurrentDirectoryTool, ToolRegistry, type Tool } from "@/index";
 
 describe("CurrentDirectoryTool", () => {
   it("returns the configured current directory", async () => {

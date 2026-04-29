@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { AgentMessageFactory } from "../src/agent/agent-message-factory";
-import { Conversation } from "../src/agent/conversation";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
 
 describe("AgentMessageFactory", () => {
   it("creates user and assistant messages", () => {

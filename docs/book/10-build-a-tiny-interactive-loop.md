@@ -227,10 +227,10 @@ Create `src/terminal/interactive-loop.ts`:
 
 ```ts
 import { createInterface } from "node:readline/promises";
-import type { AgentLoop } from "../agent/agent-loop";
-import type { Conversation } from "../agent/conversation";
-import type { ModelContext } from "../model/model-context";
-import type { SessionStore } from "../session/session-store";
+import type { AgentLoop } from "@/agent/agent-loop";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelContext } from "@/model/model-context";
+import type { SessionStore } from "@/session/session-store";
 
 export interface InteractiveLoopOptions {
   readonly agentLoop: AgentLoop;
@@ -392,7 +392,7 @@ import {
   parseArgs,
   resolveProjectRoot,
   validateSessionId,
-} from "./index";
+} from "@/index";
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -526,26 +526,26 @@ conversation messages.
 Update `src/index.ts`:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { ModelContext } from "./model/model-context";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { ModelContext } from "@/model/model-context";
 export {
   OpenAIModelClient,
   buildModelInstructions,
   type OpenAIResponsesClient,
-} from "./model/openai-model-client";
-export { ProjectInstructions } from "./project/project-instructions";
+} from "@/model/openai-model-client";
+export { ProjectInstructions } from "@/project/project-instructions";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/jsonl-session-store";
-export type { SessionStore } from "./session/session-store";
-export { InteractiveLoop } from "./terminal/interactive-loop";
-export { parseArgs, type ParsedArgs } from "./terminal/parse-args";
+} from "@/session/jsonl-session-store";
+export type { SessionStore } from "@/session/session-store";
+export { InteractiveLoop } from "@/terminal/interactive-loop";
+export { parseArgs, type ParsedArgs } from "@/terminal/parse-args";
 export {
   BashTool,
   formatCommandResult,
@@ -553,16 +553,19 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/read-file-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
-export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
+} from "@/tools/read-file-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
+export {
+  ToolRequestParser,
+  type ToolRequest,
+} from "@/tools/tool-request-parser";
 ```
 
 Again, the barrel exports names. It does not become the place where logic lives.
@@ -654,8 +657,8 @@ import {
   ReadFileTool,
   ToolRegistry,
   parseArgs,
-} from "../src";
-import { withTempProject } from "./helpers";
+} from "@/index";
+import { withTempProject } from "@tests/helpers";
 
 function createOutputRecorder(): {
   output: NodeJS.WritableStream;

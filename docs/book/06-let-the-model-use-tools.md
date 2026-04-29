@@ -170,7 +170,7 @@ become a pile of standalone helpers. This chapter adds a method to that object.
 `src/agent/agent-message-factory.ts`:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export class AgentMessageFactory {
   createUserMessage(content: string): AgentMessage {
@@ -203,7 +203,7 @@ clearly.
 `src/agent/conversation.ts`:
 
 ```ts
-import type { AgentMessage } from "./agent-message";
+import type { AgentMessage } from "@/agent/agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -297,8 +297,8 @@ The deterministic model client needs just enough behavior to test both paths.
 `src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -356,8 +356,8 @@ tell the model about the tiny text protocol.
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/agent-message";
-import type { ModelClient } from "./model-client";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -413,11 +413,11 @@ Now update the orchestrator.
 `src/agent/agent-loop.ts`:
 
 ```ts
-import { AgentMessageFactory } from "./agent-message-factory";
-import type { Conversation } from "./conversation";
-import type { ModelClient } from "../model/model-client";
-import type { ToolRegistry } from "../tools/tool-registry";
-import { ToolRequestParser } from "../tools/tool-request-parser";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelClient } from "@/model/model-client";
+import type { ToolRegistry } from "@/tools/tool-registry";
+import { ToolRequestParser } from "@/tools/tool-request-parser";
 
 export class AgentLoop {
   constructor(
@@ -510,13 +510,13 @@ those guardrails.
 `src/index.ts` stays boring:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { OpenAIModelClient } from "./model/openai-model-client";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { OpenAIModelClient } from "@/model/openai-model-client";
 export {
   BashTool,
   formatCommandResult,
@@ -524,11 +524,14 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
-export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
+export {
+  ToolRequestParser,
+  type ToolRequest,
+} from "@/tools/tool-request-parser";
 ```
 
 There is still no `runTurnWithTools()` helper in this file. That behavior has a
@@ -566,7 +569,7 @@ import {
   EchoModelClient,
   OpenAIModelClient,
   ToolRegistry,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -672,7 +675,7 @@ Start with the smallest new object.
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import { ToolRequestParser } from "../src/index";
+import { ToolRequestParser } from "@/index";
 
 describe("ToolRequestParser", () => {
   it("parses a tool request without input", () => {
@@ -716,7 +719,7 @@ import {
   ToolRegistry,
   type AgentMessage,
   type ModelClient,
-} from "../src/index";
+} from "@/index";
 
 class RecordingModelClient implements ModelClient {
   public receivedMessages: AgentMessage[] = [];

@@ -96,6 +96,12 @@ This manifest owns the CLI, the bundle, and the test command. The dependencies a
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@tests/*": ["tests/*"]
+    },
+    "ignoreDeprecations": "6.0",
     "lib": ["ES2022"],
     "types": ["bun-types"],
     "strict": true,
@@ -114,6 +120,7 @@ The key settings are:
 
 - `strict: true`, so the project starts with useful type checking.
 - `moduleResolution: "Bundler"`, so TypeScript accepts the same extensionless imports Bun bundles.
+- `baseUrl` and `paths`, so project files can use absolute imports like `@/index` instead of walking through relative paths.
 - `types: ["bun-types"]`, so the test runner and Bun globals are available to the checker.
 - `noEmit: true`, so `tsc` stays in the background while Bun produces the runnable bundle.
 
@@ -140,7 +147,7 @@ The empty-input branch adds one real edge case without turning this chapter into
 ## `ty-term/src/cli.ts`
 
 ```ts
-import { respondToPrompt } from "./index";
+import { respondToPrompt } from "@/index";
 
 const prompt = process.argv.slice(2).join(" ");
 const response = respondToPrompt(prompt);
@@ -155,7 +162,7 @@ That boundary matters more than the tiny code suggests. `cli.ts` is allowed to k
 Notice the import path:
 
 ```ts
-import { respondToPrompt } from "./index";
+import { respondToPrompt } from "@/index";
 ```
 
 The source stays extensionless on purpose. Bun resolves that path while bundling, and `moduleResolution: "Bundler"` lets TypeScript validate the same source-level import.
@@ -164,7 +171,7 @@ The source stays extensionless on purpose. Bun resolves that path while bundling
 
 ```ts
 import { describe, expect, it } from "bun:test";
-import { respondToPrompt } from "../src/index";
+import { respondToPrompt } from "@/index";
 
 describe("respondToPrompt", () => {
   it("echoes a fake agent response for a prompt", () => {

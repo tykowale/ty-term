@@ -147,8 +147,8 @@ provider does not discover that context by reading project files.
 Update `src/model/model-client.ts`:
 
 ```ts
-import type { Conversation } from "../agent/conversation";
-import type { ModelContext } from "./model-context";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelContext } from "@/model/model-context";
 
 export interface ModelClient {
   createResponse(
@@ -178,9 +178,9 @@ instructions, but it should implement the same interface as real providers.
 Update `src/model/echo-model-client.ts`:
 
 ```ts
-import type { Conversation } from "../agent/conversation";
-import type { ModelClient } from "./model-client";
-import type { ModelContext } from "./model-context";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelClient } from "@/model/model-client";
+import type { ModelContext } from "@/model/model-context";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(
@@ -216,8 +216,8 @@ Create `src/project/project-instructions.ts`:
 ```ts
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { ModelContext } from "../model/model-context";
-import { resolveProjectRoot } from "../tools/read-file-tool";
+import { ModelContext } from "@/model/model-context";
+import { resolveProjectRoot } from "@/tools/read-file-tool";
 
 export class ProjectInstructions {
   private readonly projectRoot: string;
@@ -338,9 +338,9 @@ Update `src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { Conversation } from "../agent/conversation";
-import type { ModelClient } from "./model-client";
-import type { ModelContext } from "./model-context";
+import type { Conversation } from "@/agent/conversation";
+import type { ModelClient } from "@/model/model-client";
+import type { ModelContext } from "@/model/model-context";
 
 export interface OpenAIResponsesClient {
   responses: {
@@ -437,12 +437,12 @@ call.
 Update `src/agent/agent-loop.ts`:
 
 ```ts
-import type { ModelClient } from "../model/model-client";
-import { ModelContext } from "../model/model-context";
-import type { ToolRegistry } from "../tools/tool-registry";
-import { ToolRequestParser } from "../tools/tool-request-parser";
-import type { AgentMessageFactory } from "./agent-message-factory";
-import type { Conversation } from "./conversation";
+import type { ModelClient } from "@/model/model-client";
+import { ModelContext } from "@/model/model-context";
+import type { ToolRegistry } from "@/tools/tool-registry";
+import { ToolRequestParser } from "@/tools/tool-request-parser";
+import type { AgentMessageFactory } from "@/agent/agent-message-factory";
+import type { Conversation } from "@/agent/conversation";
 
 export class AgentLoop {
   private readonly messageFactory: AgentMessageFactory;
@@ -520,24 +520,24 @@ turn. That is orchestration. File discovery stays outside the agent loop.
 Update `src/index.ts`:
 
 ```ts
-export { AgentLoop } from "./agent/agent-loop";
-export type { AgentMessage, AgentRole } from "./agent/agent-message";
-export { AgentMessageFactory } from "./agent/agent-message-factory";
-export { Conversation } from "./agent/conversation";
-export { EchoModelClient } from "./model/echo-model-client";
-export type { ModelClient } from "./model/model-client";
-export { ModelContext } from "./model/model-context";
+export { AgentLoop } from "@/agent/agent-loop";
+export type { AgentMessage, AgentRole } from "@/agent/agent-message";
+export { AgentMessageFactory } from "@/agent/agent-message-factory";
+export { Conversation } from "@/agent/conversation";
+export { EchoModelClient } from "@/model/echo-model-client";
+export type { ModelClient } from "@/model/model-client";
+export { ModelContext } from "@/model/model-context";
 export {
   OpenAIModelClient,
   buildModelInstructions,
   type OpenAIResponsesClient,
-} from "./model/openai-model-client";
-export { ProjectInstructions } from "./project/project-instructions";
+} from "@/model/openai-model-client";
+export { ProjectInstructions } from "@/project/project-instructions";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/jsonl-session-store";
-export type { SessionStore } from "./session/session-store";
+} from "@/session/jsonl-session-store";
+export type { SessionStore } from "@/session/session-store";
 export {
   BashTool,
   formatCommandResult,
@@ -545,16 +545,19 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/bash-tool";
-export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+} from "@/tools/bash-tool";
+export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/read-file-tool";
-export type { Tool } from "./tools/tool";
-export { ToolRegistry } from "./tools/tool-registry";
-export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
+} from "@/tools/read-file-tool";
+export type { Tool } from "@/tools/tool";
+export { ToolRegistry } from "@/tools/tool-registry";
+export {
+  ToolRequestParser,
+  type ToolRequest,
+} from "@/tools/tool-request-parser";
 ```
 
 The barrel exports names. It still does not implement behavior.
@@ -589,7 +592,7 @@ import {
   ToolRegistry,
   resolveProjectRoot,
   validateSessionId,
-} from "./index";
+} from "@/index";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -746,7 +749,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "bun:test";
-import { ProjectInstructions } from "../src/index";
+import { ProjectInstructions } from "@/index";
 
 async function withTempProject(
   callback: (projectRoot: string) => Promise<void>,
@@ -820,7 +823,7 @@ import {
   buildModelInstructions,
   type AgentMessage,
   type ModelClient,
-} from "../src/index";
+} from "@/index";
 
 class RecordingModelClient implements ModelClient {
   readonly calls: Array<{
