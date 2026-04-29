@@ -376,23 +376,25 @@ That is composition. The CLI is not the owner of the terminal loop.
 #!/usr/bin/env bun
 
 import { stdin, stdout } from "node:process";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { ProjectInstructions } from "@/project/project-instructions";
 import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  InteractiveLoop,
   JsonlSessionStore,
-  OpenAIModelClient,
-  ProjectInstructions,
-  ReadFileTool,
-  ToolRegistry,
-  parseArgs,
-  resolveProjectRoot,
   validateSessionId,
-} from "@/index";
+} from "@/session/jsonl-session-store";
+import { InteractiveLoop } from "@/terminal/interactive-loop";
+import { parseArgs } from "@/terminal/parse-args";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import {
+  ReadFileTool,
+  resolveProjectRoot,
+} from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
@@ -644,20 +646,17 @@ Create `tests/interactive-loop.test.ts`:
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  InteractiveLoop,
-  JsonlSessionStore,
-  ModelContext,
-  ReadFileTool,
-  ToolRegistry,
-  parseArgs,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { ModelContext } from "@/model/model-context";
+import { JsonlSessionStore } from "@/session/jsonl-session-store";
+import { InteractiveLoop } from "@/terminal/interactive-loop";
+import { parseArgs } from "@/terminal/parse-args";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ReadFileTool } from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 import { withTempProject } from "@tests/helpers";
 
 function createOutputRecorder(): {

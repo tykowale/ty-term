@@ -318,16 +318,14 @@ Chapter 5 keeps that path and registers one more tool:
 ```ts
 #!/usr/bin/env bun
 
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  OpenAIModelClient,
-  ToolRegistry,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -444,14 +442,13 @@ unknown-tool errors, and registry dispatch.
 Add focused bash tests in `tests/bash-tool.test.ts`:
 
 ```ts
-import { describe, expect, it } from "bun:test";
 import {
   BashTool,
-  ToolRegistry,
   formatCommandResult,
   runShellCommand,
   type CommandRunner,
-} from "@/index";
+} from "@/tools/bash-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 function nodeCommand(script: string): string {
   return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`;

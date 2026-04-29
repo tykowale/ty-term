@@ -327,33 +327,6 @@ Read the chapter's core data flow as:
 AgentMessageFactory -> Conversation.runTurn() -> Conversation.renderTranscript()
 ```
 
-## The Barrel File Exports, It Does Not Behave
-
-Chapter 1 put the temporary helper in `src/index.ts`. This chapter turns
-`src/index.ts` into a barrel:
-
-```ts
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-```
-
-A barrel file gives callers one stable import path:
-
-```ts
-import { AgentMessageFactory, Conversation } from "@/index";
-```
-
-But it should not collect behavior. If `index.ts` starts accumulating message
-helpers, tool helpers, model helpers, and session helpers, it becomes the same
-god module we are trying to avoid.
-
-So the rule is simple:
-
-```text
-src/index.ts re-exports domain objects; it does not implement them.
-```
-
 ## The CLI Stays Boring
 
 The command-line file remains a process adapter. Update `src/cli.ts`:
@@ -361,7 +334,8 @@ The command-line file remains a process adapter. Update `src/cli.ts`:
 ```ts
 #!/usr/bin/env bun
 
-import { AgentMessageFactory, Conversation } from "@/index";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
 
 const prompt = process.argv.slice(2).join(" ");
 const messageFactory = new AgentMessageFactory();
@@ -393,11 +367,10 @@ chapter keeps the run short so the representation is easy to inspect.
 
 The tests should lock down ownership, not just output.
 
-Add `tests/conversation.test.ts`:
+Add `tests/agent/agent-message-factory.test.ts`
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import { AgentMessageFactory, Conversation, type AgentMessage } from "@/index";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
 
 describe("AgentMessageFactory", () => {
   it("creates user and assistant messages", () => {
@@ -416,87 +389,54 @@ describe("AgentMessageFactory", () => {
     );
   });
 });
+```
+
+Add `tests/agent/conversation.test.ts`:
+
+```ts
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
 
 describe("Conversation", () => {
-  it("runs one fake turn and keeps messages in order", () => {
-    const messageFactory = new AgentMessageFactory();
-    const conversation = new Conversation(messageFactory);
+    it("stores one user and assistant exchange", () => {
+        const messageFactory = new AgentMessageFactory();
+        const conversation = new Conversation(messageFactory);
 
-    conversation.runTurn("hello");
+        conversation.runTurn("hello");
 
-    expect(conversation.getMessages()).toEqual([
-      {
-        role: "user",
-        content: "hello",
-      },
-      {
-        role: "assistant",
-        content: "agent heard: hello",
-      },
-    ]);
-  });
-
-  it("does not expose its internal message array", () => {
-    const messageFactory = new AgentMessageFactory();
-    const existingMessages: AgentMessage[] = [
-      {
-        role: "assistant",
-        content: "ready",
-      },
-    ];
-    const conversation = new Conversation(messageFactory, existingMessages);
-
-    existingMessages.push({
-      role: "user",
-      content: "mutation outside the conversation",
+        expect(conversation.getMessages()).toEqual([
+            {
+                role: "user",
+                content: "hello",
+            },
+            {
+                role: "assistant",
+                content: "agent heard: hello",
+            },
+        ]);
     });
 
-    const snapshot = conversation.getMessages();
-    snapshot.push({
-      role: "assistant",
-      content: "mutation through the snapshot",
+    it("renders the transcript without exposing storage concerns to the CLI", () => {
+        const messageFactory = new AgentMessageFactory();
+        const conversation = new Conversation(messageFactory);
+
+        conversation.runTurn("hello");
+
+        expect(conversation.renderTranscript()).toBe(
+            "user: hello\nassistant: agent heard: hello",
+        );
     });
 
-    expect(conversation.getMessages()).toEqual([
-      {
-        role: "assistant",
-        content: "ready",
-      },
-    ]);
-  });
+    it("keeps an empty prompt visible", () => {
+        const messageFactory = new AgentMessageFactory();
+        const conversation = new Conversation(messageFactory);
 
-  it("renders a transcript in message order", () => {
-    const messageFactory = new AgentMessageFactory();
-    const conversation = new Conversation(messageFactory);
+        conversation.runTurn("");
 
-    conversation.runTurn("hello");
-
-    expect(conversation.renderTranscript()).toBe(
-      "user: hello\nassistant: agent heard: hello",
-    );
-  });
-
-  it("keeps an empty prompt visible", () => {
-    const messageFactory = new AgentMessageFactory();
-    const conversation = new Conversation(messageFactory);
-
-    conversation.runTurn("");
-
-    expect(conversation.getMessages()).toEqual([
-      {
-        role: "user",
-        content: "",
-      },
-      {
-        role: "assistant",
-        content: "agent heard: ",
-      },
-    ]);
-
-    expect(conversation.renderTranscript()).toBe(
-      "user: \nassistant: agent heard: ",
-    );
-  });
+        expect(conversation.renderTranscript()).toBe(
+            "user: \nassistant: agent heard: ",
+        );
+    });
 });
 ```
 

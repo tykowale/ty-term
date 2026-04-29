@@ -440,18 +440,18 @@ It still does not validate file paths itself.
 ```ts
 #!/usr/bin/env bun
 
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  OpenAIModelClient,
   ReadFileTool,
-  ToolRegistry,
   resolveProjectRoot,
-} from "@/index";
+} from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -589,8 +589,10 @@ directories so they do not depend on the actual repository checkout.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import { ReadFileTool, resolveProjectFilePath } from "@/index";
+import {
+  ReadFileTool,
+  resolveProjectFilePath,
+} from "@/tools/read-file-tool";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,
@@ -686,18 +688,15 @@ Now extend the Chapter 6 `AgentLoop` tests with a file-read case.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  ReadFileTool,
-  ToolRegistry,
-  type AgentMessage,
-  type ModelClient,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import type { ModelClient } from "@/model/model-client";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ReadFileTool } from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,

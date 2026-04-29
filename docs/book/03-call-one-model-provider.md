@@ -337,13 +337,11 @@ The CLI now chooses a model client and wires the objects together.
 ```ts
 #!/usr/bin/env bun
 
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  EchoModelClient,
-  OpenAIModelClient,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
 
 const args = process.argv.slice(2);
 const useOpenAI = args.includes("--openai");
@@ -399,15 +397,12 @@ The tests should lock down the object boundaries:
 Start with `tests/agent-loop.test.ts`:
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  EchoModelClient,
-  type AgentMessage,
-  type ModelClient,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import type { ModelClient } from "@/model/model-client";
 
 class RecordingModelClient implements ModelClient {
   public receivedMessages: AgentMessage[] = [];
@@ -488,7 +483,6 @@ If you want a CLI-level test for the optional provider flag, keep it focused on
 the guard behavior:
 
 ```ts
-import { describe, expect, it } from "bun:test";
 
 describe("CLI provider selection", () => {
   it("requires OPENAI_API_KEY when --openai is requested", async () => {

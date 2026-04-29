@@ -266,15 +266,13 @@ Normal prompts still go through `AgentLoop`.
 ```ts
 #!/usr/bin/env bun
 
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  OpenAIModelClient,
-  ToolRegistry,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -382,8 +380,9 @@ contract.
 Add focused tests for the tool boundary in `tests/tool-registry.test.ts`:
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import { CurrentDirectoryTool, ToolRegistry, type Tool } from "@/index";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import type { Tool } from "@/tools/tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 describe("CurrentDirectoryTool", () => {
   it("returns the configured current directory", async () => {

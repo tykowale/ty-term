@@ -83,7 +83,7 @@ Initialize the package with `bun init -y`, then add the files below. The layout 
 This manifest owns the CLI, the bundle, and the test command. The dependencies are the minimum foundation for later chapters:
 
 - `openai` for the model-provider chapter later in the book
-- `bun-types` for Bun globals and `bun:test`
+- `bun-types` for Bun globals and test helper types
 - `typescript` for editor and type-checking support
 
 `openai` is installed early so later chapters can use it without changing the project shape. Nothing in this chapter depends on an API key.
@@ -103,7 +103,7 @@ This manifest owns the CLI, the bundle, and the test command. The dependencies a
     },
     "ignoreDeprecations": "6.0",
     "lib": ["ES2022"],
-    "types": ["bun-types"],
+    "types": ["bun-types", "bun-types/test-globals"],
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,
@@ -120,11 +120,11 @@ The key settings are:
 
 - `strict: true`, so the project starts with useful type checking.
 - `moduleResolution: "Bundler"`, so TypeScript accepts the same extensionless imports Bun bundles.
-- `baseUrl` and `paths`, so project files can use absolute imports like `@/index` instead of walking through relative paths.
-- `types: ["bun-types"]`, so the test runner and Bun globals are available to the checker.
+- `baseUrl` and `paths`, so project files can use absolute imports like `@/respond-to-prompt` instead of walking through relative paths.
+- `types: ["bun-types", "bun-types/test-globals"]`, so Bun globals and test helpers like `describe`, `it`, and `expect` are available to the checker.
 - `noEmit: true`, so `tsc` stays in the background while Bun produces the runnable bundle.
 
-## `ty-term/src/index.ts`
+## `ty-term/src/respond-to-prompt.ts`
 
 ```ts
 export function respondToPrompt(prompt: string): string {
@@ -147,7 +147,7 @@ The empty-input branch adds one real edge case without turning this chapter into
 ## `ty-term/src/cli.ts`
 
 ```ts
-import { respondToPrompt } from "@/index";
+import { respondToPrompt } from "@/respond-to-prompt";
 
 const prompt = process.argv.slice(2).join(" ");
 const response = respondToPrompt(prompt);
@@ -162,7 +162,7 @@ That boundary matters more than the tiny code suggests. `cli.ts` is allowed to k
 Notice the import path:
 
 ```ts
-import { respondToPrompt } from "@/index";
+import { respondToPrompt } from "@/respond-to-prompt";
 ```
 
 The source stays extensionless on purpose. Bun resolves that path while bundling, and `moduleResolution: "Bundler"` lets TypeScript validate the same source-level import.
@@ -170,8 +170,7 @@ The source stays extensionless on purpose. Bun resolves that path while bundling
 ## `ty-term/tests/respond-to-prompt.test.ts`
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import { respondToPrompt } from "@/index";
+import { respondToPrompt } from "@/respond-to-prompt";
 
 describe("respondToPrompt", () => {
   it("echoes a fake agent response for a prompt", () => {
@@ -265,7 +264,7 @@ ty-term/tsconfig.json
 The source files split temporary behavior from the terminal adapter:
 
 ```text
-src/index.ts
+src/respond-to-prompt.ts
 src/cli.ts
 ```
 

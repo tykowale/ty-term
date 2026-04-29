@@ -578,21 +578,23 @@ Update `src/cli.ts`:
 ```ts
 #!/usr/bin/env bun
 
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { ProjectInstructions } from "@/project/project-instructions";
 import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
   JsonlSessionStore,
-  OpenAIModelClient,
-  ProjectInstructions,
-  ReadFileTool,
-  ToolRegistry,
-  resolveProjectRoot,
   validateSessionId,
-} from "@/index";
+} from "@/session/jsonl-session-store";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import {
+  ReadFileTool,
+  resolveProjectRoot,
+} from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -748,8 +750,7 @@ Create `tests/project-instructions.test.ts`:
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import { ProjectInstructions } from "@/index";
+import { ProjectInstructions } from "@/project/project-instructions";
 
 async function withTempProject(
   callback: (projectRoot: string) => Promise<void>,
@@ -811,19 +812,16 @@ Create `tests/model-context.test.ts`:
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  CurrentDirectoryTool,
-  JsonlSessionStore,
-  ModelContext,
-  ToolRegistry,
-  buildModelInstructions,
-  type AgentMessage,
-  type ModelClient,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import type { ModelClient } from "@/model/model-client";
+import { ModelContext } from "@/model/model-context";
+import { buildModelInstructions } from "@/model/openai-model-client";
+import { JsonlSessionStore } from "@/session/jsonl-session-store";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 class RecordingModelClient implements ModelClient {
   readonly calls: Array<{

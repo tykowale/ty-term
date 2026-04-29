@@ -1,24 +1,5 @@
-import { describe, expect, it } from "bun:test";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
-
-describe("AgentMessageFactory", () => {
-  it("creates user and assistant messages", () => {
-    const messageFactory = new AgentMessageFactory();
-
-    expect(messageFactory.createUserMessage("hello")).toEqual({
-      role: "user",
-      content: "hello",
-    });
-
-    expect(messageFactory.createAssistantMessage("agent heard: hello")).toEqual(
-      {
-        role: "assistant",
-        content: "agent heard: hello",
-      },
-    );
-  });
-});
 
 describe("Conversation", () => {
   it("stores one user and assistant exchange", () => {

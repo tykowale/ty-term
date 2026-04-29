@@ -486,20 +486,22 @@ Update `src/cli.ts`:
 ```ts
 #!/usr/bin/env bun
 
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
 import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
   JsonlSessionStore,
-  OpenAIModelClient,
-  ReadFileTool,
-  ToolRegistry,
-  resolveProjectRoot,
   validateSessionId,
-} from "@/index";
+} from "@/session/jsonl-session-store";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import {
+  ReadFileTool,
+  resolveProjectRoot,
+} from "@/tools/read-file-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -674,8 +676,10 @@ Create `tests/session-store.test.ts`:
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import { JsonlSessionStore, validateSessionId } from "@/index";
+import {
+  JsonlSessionStore,
+  validateSessionId,
+} from "@/session/jsonl-session-store";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,
@@ -786,15 +790,12 @@ Create `tests/session-resume.test.ts`:
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  EchoModelClient,
-  JsonlSessionStore,
-  ToolRegistry,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { JsonlSessionStore } from "@/session/jsonl-session-store";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,

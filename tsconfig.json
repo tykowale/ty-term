@@ -10,7 +10,7 @@
     },
     "ignoreDeprecations": "6.0",
     "lib": ["ES2022"],
-    "types": ["bun-types"],
+    "types": ["bun-types", "bun-types/test-globals"],
     "strict": true,
     "noEmit": true,
     "esModuleInterop": true,

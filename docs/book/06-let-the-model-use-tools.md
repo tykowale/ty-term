@@ -560,16 +560,14 @@ That split is the chapter's capability boundary.
 ```ts
 #!/usr/bin/env bun
 
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  BashTool,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  OpenAIModelClient,
-  ToolRegistry,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import { OpenAIModelClient } from "@/model/openai-model-client";
+import { BashTool } from "@/tools/bash-tool";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
   readonly useOpenAI: boolean;
@@ -674,8 +672,7 @@ Start with the smallest new object.
 `tests/tool-request-parser.test.ts`:
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import { ToolRequestParser } from "@/index";
+import { ToolRequestParser } from "@/tools/tool-request-parser";
 
 describe("ToolRequestParser", () => {
   it("parses a tool request without input", () => {
@@ -709,17 +706,14 @@ with structured provider calls, the parser tests show exactly what changed.
 Now update `tests/agent-loop.test.ts` so `AgentLoop` proves both branches.
 
 ```ts
-import { describe, expect, it } from "bun:test";
-import {
-  AgentLoop,
-  AgentMessageFactory,
-  Conversation,
-  CurrentDirectoryTool,
-  EchoModelClient,
-  ToolRegistry,
-  type AgentMessage,
-  type ModelClient,
-} from "@/index";
+import { AgentLoop } from "@/agent/agent-loop";
+import type { AgentMessage } from "@/agent/agent-message";
+import { AgentMessageFactory } from "@/agent/agent-message-factory";
+import { Conversation } from "@/agent/conversation";
+import { EchoModelClient } from "@/model/echo-model-client";
+import type { ModelClient } from "@/model/model-client";
+import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
+import { ToolRegistry } from "@/tools/tool-registry";
 
 class RecordingModelClient implements ModelClient {
   public receivedMessages: AgentMessage[] = [];
