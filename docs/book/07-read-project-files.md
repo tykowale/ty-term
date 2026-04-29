@@ -105,21 +105,21 @@ Add one new tool class:
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    openai-model-client.ts
   tools/
-    BashTool.ts
-    CurrentDirectoryTool.ts
-    ReadFileTool.ts
-    Tool.ts
-    ToolRegistry.ts
-    ToolRequestParser.ts
+    bash-tool.ts
+    current-directory-tool.ts
+    read-file-tool.ts
+    tool.ts
+    tool-registry.ts
+    tool-request-parser.ts
   cli.ts
   index.ts
 tests/
@@ -143,12 +143,12 @@ back into `index.ts`.
 
 ## The ReadFileTool
 
-Create `src/tools/ReadFileTool.ts`:
+Create `src/tools/read-file-tool.ts`:
 
 ```ts
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Tool } from "./Tool";
+import type { Tool } from "./tool";
 
 export class ReadFileTool implements Tool {
   public readonly name = "read_file";
@@ -250,11 +250,11 @@ with `../`, or becomes absolute.
 `EchoModelClient` is still a deterministic fake. It should now simulate a file
 read request when the prompt asks to read a file.
 
-`src/model/EchoModelClient.ts`:
+`src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -304,12 +304,12 @@ result through `ToolRegistry`.
 `ModelClient` interface. It only needs to update its instructions so the model
 knows the new text protocol.
 
-`src/model/OpenAIModelClient.ts`:
+`src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -395,13 +395,13 @@ It does not own file paths.
 `src/index.ts` remains a public import surface:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { OpenAIModelClient } from "./model/openai-model-client";
 export {
   BashTool,
   formatCommandResult,
@@ -409,16 +409,16 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/BashTool";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+} from "./tools/bash-tool";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/ReadFileTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
-export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+} from "./tools/read-file-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
+export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
 ```
 
 There is still no `createReadFileTool()`, no `parseToolRequest()`, and no

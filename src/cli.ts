@@ -1,8 +1,12 @@
 #!/usr/bin/env bun
 
-import { renderTranscript, runTurn } from "./index";
+import { AgentMessageFactory } from "./agent/agent-message-factory";
+import { Conversation } from "./agent/conversation";
 
 const prompt = process.argv.slice(2).join(" ");
-const conversation = runTurn([], prompt);
+const messageFactory = new AgentMessageFactory();
+const conversation = new Conversation(messageFactory);
 
-console.log(renderTranscript(conversation));
+conversation.runTurn(prompt);
+
+console.log(conversation.renderTranscript());

@@ -1,16 +1,47 @@
 #!/usr/bin/env bun
 // @bun
 
-// src/index.ts
-function respondToPrompt(prompt) {
-  const trimmedPrompt = prompt.trim();
-  if (trimmedPrompt.length === 0) {
-    return "agent needs a prompt";
+// src/agent/agent-message-factory.ts
+class AgentMessageFactory {
+  createUserMessage(content) {
+    return {
+      role: "user",
+      content
+    };
   }
-  return `agent heard: ${trimmedPrompt}`;
+  createAssistantMessage(content) {
+    return {
+      role: "assistant",
+      content
+    };
+  }
+}
+
+// src/agent/conversation.ts
+class Conversation {
+  #messages;
+  #messageFactory;
+  constructor(messageFactory, messages = []) {
+    this.#messageFactory = messageFactory;
+    this.#messages = [...messages];
+  }
+  runTurn(prompt) {
+    const userMessage = this.#messageFactory.createUserMessage(prompt);
+    const assistantMessage = this.#messageFactory.createAssistantMessage(`agent heard: ${prompt}`);
+    this.#messages.push(userMessage, assistantMessage);
+  }
+  getMessages() {
+    return [...this.#messages];
+  }
+  renderTranscript() {
+    return this.#messages.map((message) => `${message.role}: ${message.content}`).join(`
+`);
+  }
 }
 
 // src/cli.ts
 var prompt = process.argv.slice(2).join(" ");
-var response = respondToPrompt(prompt);
-console.log(response);
+var messageFactory = new AgentMessageFactory;
+var conversation = new Conversation(messageFactory);
+conversation.runTurn(prompt);
+console.log(conversation.renderTranscript());

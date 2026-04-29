@@ -31,35 +31,35 @@ src/
   index.ts
 
   agent/
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
-    AgentLoop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
+    agent-loop.ts
 
   model/
-    ModelClient.ts
-    EchoModelClient.ts
-    OpenAIModelClient.ts
-    ModelContext.ts
+    model-client.ts
+    echo-model-client.ts
+    openai-model-client.ts
+    model-context.ts
 
   tools/
-    Tool.ts
-    ToolRegistry.ts
-    CurrentDirectoryTool.ts
-    BashTool.ts
-    ReadFileTool.ts
-    ToolRequestParser.ts
+    tool.ts
+    tool-registry.ts
+    current-directory-tool.ts
+    bash-tool.ts
+    read-file-tool.ts
+    tool-request-parser.ts
 
   session/
-    SessionStore.ts
-    JsonlSessionStore.ts
+    session-store.ts
+    jsonl-session-store.ts
 
   project/
-    ProjectInstructions.ts
+    project-instructions.ts
 
   terminal/
-    InteractiveLoop.ts
-    parseArgs.ts
+    interactive-loop.ts
+    parse-args.ts
 ```
 
 The exact file set can grow chapter by chapter. Do not introduce future files
@@ -152,9 +152,9 @@ why message construction and message history deserve named owners.
 
 Likely files:
 
-- `src/agent/AgentMessage.ts`
-- `src/agent/AgentMessageFactory.ts`
-- `src/agent/Conversation.ts`
+- `src/agent/agent-message.ts`
+- `src/agent/agent-message-factory.ts`
+- `src/agent/conversation.ts`
 - `src/index.ts`
 - `src/cli.ts`
 - `tests/conversation.test.ts`
@@ -186,10 +186,10 @@ depending on model clients.
 
 Likely files:
 
-- `src/agent/AgentLoop.ts`
-- `src/model/ModelClient.ts`
-- `src/model/EchoModelClient.ts`
-- `src/model/OpenAIModelClient.ts`
+- `src/agent/agent-loop.ts`
+- `src/model/model-client.ts`
+- `src/model/echo-model-client.ts`
+- `src/model/openai-model-client.ts`
 - existing `agent` files
 - `src/cli.ts`
 - tests around `AgentLoop`
@@ -201,10 +201,10 @@ Introduce `Tool` and `ToolRegistry` as objects. Avoid loose helpers such as
 
 Likely files:
 
-- `src/tools/Tool.ts`
-- `src/tools/ToolRegistry.ts`
-- `src/tools/CurrentDirectoryTool.ts`
-- `src/agent/AgentLoop.ts`
+- `src/tools/tool.ts`
+- `src/tools/tool-registry.ts`
+- `src/tools/current-directory-tool.ts`
+- `src/agent/agent-loop.ts`
 - `src/cli.ts`
 
 `AgentLoop` should receive a registry dependency only when a chapter needs it.
@@ -216,8 +216,8 @@ behind the tool object. Do not mix command execution into `AgentLoop` or `cli.ts
 
 Likely files:
 
-- `src/tools/BashTool.ts`
-- optional `src/tools/CommandExecutor.ts`
+- `src/tools/bash-tool.ts`
+- optional `src/tools/command-executor.ts`
 - existing tool registry files
 - tests for command execution behavior
 
@@ -245,7 +245,7 @@ path-safety decisions near this tool, not in `cli.ts` and not in `AgentLoop`.
 
 Likely files:
 
-- `src/tools/ReadFileTool.ts`
+- `src/tools/read-file-tool.ts`
 - optional project-root helper if needed
 - tests with temporary directories
 
@@ -256,9 +256,9 @@ save conversation messages. It should not own model calls or tool execution.
 
 Likely files:
 
-- `src/session/SessionStore.ts`
-- `src/session/JsonlSessionStore.ts`
-- `src/agent/Conversation.ts`
+- `src/session/session-store.ts`
+- `src/session/jsonl-session-store.ts`
+- `src/agent/conversation.ts`
 - `src/cli.ts`
 
 The chapter should explain serialization boundaries: classes own behavior, but
@@ -272,10 +272,10 @@ system messages.
 
 Likely files:
 
-- `src/project/ProjectInstructions.ts`
-- `src/model/ModelContext.ts`
-- `src/agent/AgentLoop.ts`
-- `src/model/OpenAIModelClient.ts`
+- `src/project/project-instructions.ts`
+- `src/model/model-context.ts`
+- `src/agent/agent-loop.ts`
+- `src/model/openai-model-client.ts`
 
 ### Chapter 10: Build a Tiny Interactive Loop
 
@@ -284,8 +284,8 @@ compose dependencies and call it.
 
 Likely files:
 
-- `src/terminal/InteractiveLoop.ts`
-- `src/terminal/parseArgs.ts`
+- `src/terminal/interactive-loop.ts`
+- `src/terminal/parse-args.ts`
 - `src/cli.ts`
 
 `InteractiveLoop` owns repeated prompting, appended-message display, and session

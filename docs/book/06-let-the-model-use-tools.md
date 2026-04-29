@@ -97,7 +97,7 @@ regular expression through `AgentLoop`, `cli.ts`, and tests. The parser gets its
 own class:
 
 ```text
-src/tools/ToolRequestParser.ts
+src/tools/tool-request-parser.ts
 ```
 
 The parser does not execute tools. It only translates assistant text into a
@@ -110,20 +110,20 @@ The book's OOP spine now looks like this:
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    openai-model-client.ts
   tools/
-    BashTool.ts
-    CurrentDirectoryTool.ts
-    Tool.ts
-    ToolRegistry.ts
-    ToolRequestParser.ts
+    bash-tool.ts
+    current-directory-tool.ts
+    tool.ts
+    tool-registry.ts
+    tool-request-parser.ts
   cli.ts
   index.ts
 tests/
@@ -133,14 +133,14 @@ tests/
   tool-request-parser.test.ts
 ```
 
-The only new source file is `ToolRequestParser.ts`. Existing files evolve to
+The only new source file is `tool-request-parser.ts`. Existing files evolve to
 carry tool messages through the loop.
 
 ## Tool Messages
 
 Before the loop can record a tool result, the message type needs one more role.
 
-`src/agent/AgentMessage.ts`:
+`src/agent/agent-message.ts`:
 
 ```ts
 export type AgentRole = "user" | "assistant" | "tool";
@@ -167,10 +167,10 @@ refactor. Here, the optional field keeps the chapter focused on the loop.
 Chapter 2 introduced `AgentMessageFactory` so message construction would not
 become a pile of standalone helpers. This chapter adds a method to that object.
 
-`src/agent/AgentMessageFactory.ts`:
+`src/agent/agent-message-factory.ts`:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
+import type { AgentMessage } from "./agent-message";
 
 export class AgentMessageFactory {
   createUserMessage(content: string): AgentMessage {
@@ -200,10 +200,10 @@ AgentLoop decides when each message is created.
 `Conversation` does not execute tools, but it does need to render tool messages
 clearly.
 
-`src/agent/Conversation.ts`:
+`src/agent/conversation.ts`:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
+import type { AgentMessage } from "./agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -246,7 +246,7 @@ Bad:  Conversation decides to run the cwd tool
 
 ## The Parser Boundary
 
-Now add `src/tools/ToolRequestParser.ts`:
+Now add `src/tools/tool-request-parser.ts`:
 
 ```ts
 export interface ToolRequest {
@@ -294,11 +294,11 @@ structured.
 
 The deterministic model client needs just enough behavior to test both paths.
 
-`src/model/EchoModelClient.ts`:
+`src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -352,12 +352,12 @@ saw tool cwd: /path/to/ty-term
 `OpenAIModelClient` still hides provider-specific details, but now it should
 tell the model about the tiny text protocol.
 
-`src/model/OpenAIModelClient.ts`:
+`src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -410,14 +410,14 @@ this chapter will only expose `cwd`.
 
 Now update the orchestrator.
 
-`src/agent/AgentLoop.ts`:
+`src/agent/agent-loop.ts`:
 
 ```ts
-import { AgentMessageFactory } from "./AgentMessageFactory";
-import type { Conversation } from "./Conversation";
-import type { ModelClient } from "../model/ModelClient";
-import type { ToolRegistry } from "../tools/ToolRegistry";
-import { ToolRequestParser } from "../tools/ToolRequestParser";
+import { AgentMessageFactory } from "./agent-message-factory";
+import type { Conversation } from "./conversation";
+import type { ModelClient } from "../model/model-client";
+import type { ToolRegistry } from "../tools/tool-registry";
+import { ToolRequestParser } from "../tools/tool-request-parser";
 
 export class AgentLoop {
   constructor(
@@ -510,13 +510,13 @@ those guardrails.
 `src/index.ts` stays boring:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { OpenAIModelClient } from "./model/openai-model-client";
 export {
   BashTool,
   formatCommandResult,
@@ -524,11 +524,11 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/BashTool";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
-export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+} from "./tools/bash-tool";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
+export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
 ```
 
 There is still no `runTurnWithTools()` helper in this file. That behavior has a

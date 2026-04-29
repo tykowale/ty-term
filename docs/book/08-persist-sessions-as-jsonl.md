@@ -108,24 +108,24 @@ Add a session folder and evolve `Conversation` slightly:
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    openai-model-client.ts
   session/
-    JsonlSessionStore.ts
-    SessionStore.ts
+    jsonl-session-store.ts
+    session-store.ts
   tools/
-    BashTool.ts
-    CurrentDirectoryTool.ts
-    ReadFileTool.ts
-    Tool.ts
-    ToolRegistry.ts
-    ToolRequestParser.ts
+    bash-tool.ts
+    current-directory-tool.ts
+    read-file-tool.ts
+    tool.ts
+    tool-registry.ts
+    tool-request-parser.ts
   cli.ts
   index.ts
 tests/
@@ -144,10 +144,10 @@ transcript rendering. Persistence needs two more safe access points:
 - Build a conversation from previously stored messages.
 - Ask which messages were added after a known point.
 
-Update `src/agent/Conversation.ts`:
+Update `src/agent/conversation.ts`:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
+import type { AgentMessage } from "./agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -222,10 +222,10 @@ into the object that owns behavior.
 
 ## The SessionStore Interface
 
-Create `src/session/SessionStore.ts`:
+Create `src/session/session-store.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/AgentMessage";
+import type { AgentMessage } from "../agent/agent-message";
 
 export interface SessionStore {
   load(sessionId: string): Promise<AgentMessage[]>;
@@ -251,14 +251,14 @@ Conversation.fromMessages -> Conversation
 
 ## The JsonlSessionStore
 
-Create `src/session/JsonlSessionStore.ts`:
+Create `src/session/jsonl-session-store.ts`:
 
 ```ts
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "../agent/AgentMessage";
-import { resolveProjectRoot } from "../tools/ReadFileTool";
-import type { SessionStore } from "./SessionStore";
+import type { AgentMessage } from "../agent/agent-message";
+import { resolveProjectRoot } from "../tools/read-file-tool";
+import type { SessionStore } from "./session-store";
 
 export class JsonlSessionStore implements SessionStore {
   private readonly sessionsDirectory: string;
@@ -432,18 +432,18 @@ is stored as one physical JSONL line.
 Update `src/index.ts` so it stays a barrel:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { OpenAIModelClient } from "./model/openai-model-client";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/JsonlSessionStore";
-export type { SessionStore } from "./session/SessionStore";
+} from "./session/jsonl-session-store";
+export type { SessionStore } from "./session/session-store";
 export {
   BashTool,
   formatCommandResult,
@@ -451,16 +451,16 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/BashTool";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+} from "./tools/bash-tool";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/ReadFileTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
-export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+} from "./tools/read-file-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
+export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
 ```
 
 This file still should not contain `loadSessionMessages()`,

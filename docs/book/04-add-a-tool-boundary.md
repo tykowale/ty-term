@@ -26,18 +26,18 @@ This chapter adds the first tool boundary.
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    openai-model-client.ts
   tools/
-    Tool.ts
-    ToolRegistry.ts
-    CurrentDirectoryTool.ts
+    tool.ts
+    tool-registry.ts
+    current-directory-tool.ts
   cli.ts
   index.ts
 tests/
@@ -97,7 +97,7 @@ logic across the CLI, the agent loop, and tests.
 
 ## A Tool Is A Named Object
 
-Start with the smallest useful tool interface in `src/tools/Tool.ts`:
+Start with the smallest useful tool interface in `src/tools/tool.ts`:
 
 ```ts
 export interface Tool {
@@ -127,10 +127,10 @@ a tool is a named async capability behind a typed boundary
 
 The safest possible tool is one that reports the current working directory.
 
-`src/tools/CurrentDirectoryTool.ts`:
+`src/tools/current-directory-tool.ts`:
 
 ```ts
-import type { Tool } from "./Tool";
+import type { Tool } from "./tool";
 
 export class CurrentDirectoryTool implements Tool {
   public readonly name = "cwd";
@@ -162,10 +162,10 @@ behavior being tested is tool dispatch.
 
 ## The Registry Owns Tool Dispatch
 
-Now add `src/tools/ToolRegistry.ts`:
+Now add `src/tools/tool-registry.ts`:
 
 ```ts
-import type { Tool } from "./Tool";
+import type { Tool } from "./tool";
 
 export class ToolRegistry {
   private readonly toolsByName = new Map<string, Tool>();
@@ -225,16 +225,16 @@ is a good place to teach that habit: expose behavior, not internal storage.
 `src/index.ts` should export the new objects, not implement them:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { OpenAIModelClient } from "./model/OpenAIModelClient";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { OpenAIModelClient } from "./model/openai-model-client";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
 ```
 
 This is the only role `index.ts` gets. It is a public import surface, not a
@@ -598,8 +598,8 @@ Chapter 5 should add the first tool that performs an external action:
 
 The likely next slice:
 
-- add `src/tools/BashTool.ts`
-- optionally add `src/tools/CommandExecutor.ts` if command execution needs its
+- add `src/tools/bash-tool.ts`
+- optionally add `src/tools/command-executor.ts` if command execution needs its
   own injectable boundary
 - accept a command string as tool input
 - run the command behind the `BashTool` object, not in `cli.ts` or `AgentLoop`

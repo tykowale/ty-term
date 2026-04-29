@@ -82,27 +82,27 @@ Add one project object and one model context object:
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    ModelContext.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    model-context.ts
+    openai-model-client.ts
   project/
-    ProjectInstructions.ts
+    project-instructions.ts
   session/
-    JsonlSessionStore.ts
-    SessionStore.ts
+    jsonl-session-store.ts
+    session-store.ts
   tools/
-    BashTool.ts
-    CurrentDirectoryTool.ts
-    ReadFileTool.ts
-    Tool.ts
-    ToolRegistry.ts
-    ToolRequestParser.ts
+    bash-tool.ts
+    current-directory-tool.ts
+    read-file-tool.ts
+    tool.ts
+    tool-registry.ts
+    tool-request-parser.ts
   cli.ts
   index.ts
 tests/
@@ -115,7 +115,7 @@ it does not contain project-loading behavior.
 
 ## ModelContext Is The Model-Facing Envelope
 
-Create `src/model/ModelContext.ts`:
+Create `src/model/model-context.ts`:
 
 ```ts
 export class ModelContext {
@@ -144,11 +144,11 @@ directory, enabled tool descriptions, feature flags, or skill summaries. The
 important part is that the provider receives a prepared context object. The
 provider does not discover that context by reading project files.
 
-Update `src/model/ModelClient.ts`:
+Update `src/model/model-client.ts`:
 
 ```ts
-import type { Conversation } from "../agent/Conversation";
-import type { ModelContext } from "./ModelContext";
+import type { Conversation } from "../agent/conversation";
+import type { ModelContext } from "./model-context";
 
 export interface ModelClient {
   createResponse(
@@ -175,12 +175,12 @@ tool turn, both calls must receive the same `ModelContext`.
 The echo client is still a deterministic test double. It does not need project
 instructions, but it should implement the same interface as real providers.
 
-Update `src/model/EchoModelClient.ts`:
+Update `src/model/echo-model-client.ts`:
 
 ```ts
-import type { Conversation } from "../agent/Conversation";
-import type { ModelClient } from "./ModelClient";
-import type { ModelContext } from "./ModelContext";
+import type { Conversation } from "../agent/conversation";
+import type { ModelClient } from "./model-client";
+import type { ModelContext } from "./model-context";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(
@@ -211,13 +211,13 @@ need every argument.
 
 ## ProjectInstructions Owns Local Guidance
 
-Create `src/project/ProjectInstructions.ts`:
+Create `src/project/project-instructions.ts`:
 
 ```ts
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { ModelContext } from "../model/ModelContext";
-import { resolveProjectRoot } from "../tools/ReadFileTool";
+import { ModelContext } from "../model/model-context";
+import { resolveProjectRoot } from "../tools/read-file-tool";
 
 export class ProjectInstructions {
   private readonly projectRoot: string;
@@ -334,13 +334,13 @@ provider instructions.
 The provider class should not know about `AGENTS.md`. It should know how to
 convert a `Conversation` and a `ModelContext` into an OpenAI request.
 
-Update `src/model/OpenAIModelClient.ts`:
+Update `src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { Conversation } from "../agent/Conversation";
-import type { ModelClient } from "./ModelClient";
-import type { ModelContext } from "./ModelContext";
+import type { Conversation } from "../agent/conversation";
+import type { ModelClient } from "./model-client";
+import type { ModelContext } from "./model-context";
 
 export interface OpenAIResponsesClient {
   responses: {
@@ -434,15 +434,15 @@ Chapter 8 kept `AgentLoop` focused on one turn. That remains true. It now
 accepts a `ModelContext` for the turn and passes that context to every model
 call.
 
-Update `src/agent/AgentLoop.ts`:
+Update `src/agent/agent-loop.ts`:
 
 ```ts
-import type { ModelClient } from "../model/ModelClient";
-import { ModelContext } from "../model/ModelContext";
-import type { ToolRegistry } from "../tools/ToolRegistry";
-import { ToolRequestParser } from "../tools/ToolRequestParser";
-import type { AgentMessageFactory } from "./AgentMessageFactory";
-import type { Conversation } from "./Conversation";
+import type { ModelClient } from "../model/model-client";
+import { ModelContext } from "../model/model-context";
+import type { ToolRegistry } from "../tools/tool-registry";
+import { ToolRequestParser } from "../tools/tool-request-parser";
+import type { AgentMessageFactory } from "./agent-message-factory";
+import type { Conversation } from "./conversation";
 
 export class AgentLoop {
   private readonly messageFactory: AgentMessageFactory;
@@ -520,24 +520,24 @@ turn. That is orchestration. File discovery stays outside the agent loop.
 Update `src/index.ts`:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { ModelContext } from "./model/ModelContext";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { ModelContext } from "./model/model-context";
 export {
   OpenAIModelClient,
   buildModelInstructions,
   type OpenAIResponsesClient,
-} from "./model/OpenAIModelClient";
-export { ProjectInstructions } from "./project/ProjectInstructions";
+} from "./model/openai-model-client";
+export { ProjectInstructions } from "./project/project-instructions";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/JsonlSessionStore";
-export type { SessionStore } from "./session/SessionStore";
+} from "./session/jsonl-session-store";
+export type { SessionStore } from "./session/session-store";
 export {
   BashTool,
   formatCommandResult,
@@ -545,16 +545,16 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/BashTool";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+} from "./tools/bash-tool";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/ReadFileTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
-export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+} from "./tools/read-file-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
+export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
 ```
 
 The barrel exports names. It still does not implement behavior.

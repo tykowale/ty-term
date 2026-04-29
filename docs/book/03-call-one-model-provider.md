@@ -30,14 +30,14 @@ The new owner is `AgentLoop`.
 ```text
 src/
   agent/
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
-    AgentLoop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
+    agent-loop.ts
   model/
-    ModelClient.ts
-    EchoModelClient.ts
-    OpenAIModelClient.ts
+    model-client.ts
+    echo-model-client.ts
+    openai-model-client.ts
   cli.ts
   index.ts
 tests/
@@ -109,7 +109,7 @@ The revised `Conversation` keeps the storage methods from Chapter 2 and replaces
 `runTurn()` with `appendMessages()`:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
+import type { AgentMessage } from "./agent-message";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -148,10 +148,10 @@ That is orchestration, so it belongs one level up.
 
 ## The Model Interface
 
-The model boundary starts with an interface in `src/model/ModelClient.ts`:
+The model boundary starts with an interface in `src/model/model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/AgentMessage";
+import type { AgentMessage } from "../agent/agent-message";
 
 export interface ModelClient {
   createResponse(messages: AgentMessage[]): Promise<string>;
@@ -183,11 +183,11 @@ implements the same async interface so the rest of the loop has one shape.
 Tests should not call a real model. They should not need credentials, network
 access, provider availability, or stable model output.
 
-So the first implementation is `src/model/EchoModelClient.ts`:
+So the first implementation is `src/model/echo-model-client.ts`:
 
 ```ts
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class EchoModelClient implements ModelClient {
   async createResponse(messages: AgentMessage[]): Promise<string> {
@@ -210,12 +210,12 @@ the fake client behaves like a tiny implementation of the real boundary.
 
 ## A Real Provider Client
 
-The second implementation is `src/model/OpenAIModelClient.ts`:
+The second implementation is `src/model/openai-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
-import type { AgentMessage } from "../agent/AgentMessage";
-import type { ModelClient } from "./ModelClient";
+import type { AgentMessage } from "../agent/agent-message";
+import type { ModelClient } from "./model-client";
 
 export class OpenAIModelClient implements ModelClient {
   private readonly client: OpenAI;
@@ -259,12 +259,12 @@ mock the OpenAI SDK.
 
 Now we can name the object that owns a turn.
 
-`src/agent/AgentLoop.ts`:
+`src/agent/agent-loop.ts`:
 
 ```ts
-import { AgentMessageFactory } from "./AgentMessageFactory";
-import type { Conversation } from "./Conversation";
-import type { ModelClient } from "../model/ModelClient";
+import { AgentMessageFactory } from "./agent-message-factory";
+import type { Conversation } from "./conversation";
+import type { ModelClient } from "../model/model-client";
 
 export class AgentLoop {
   constructor(
@@ -316,13 +316,13 @@ The loop also does not render anything. Rendering still belongs to
 implementing behavior:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { OpenAIModelClient } from "./model/OpenAIModelClient";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { OpenAIModelClient } from "./model/openai-model-client";
 ```
 
 This rule matters more as the book grows. `index.ts` is a public import surface,
@@ -631,8 +631,8 @@ Chapter 4 should add the next boundary: tools.
 
 The next useful slice is:
 
-- introduce `src/tools/Tool.ts`
-- introduce `src/tools/ToolRegistry.ts`
+- introduce `src/tools/tool.ts`
+- introduce `src/tools/tool-registry.ts`
 - implement one safe toy tool, such as `CurrentDirectoryTool`
 - keep tool lookup and execution out of `cli.ts`
 - pass a tool registry into `AgentLoop` only when the loop needs it

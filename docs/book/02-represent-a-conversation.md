@@ -27,9 +27,9 @@ objects:
 ```text
 src/
   agent/
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   cli.ts
   index.ts
 tests/
@@ -82,7 +82,7 @@ export interface AgentMessage {
 }
 ```
 
-This belongs in `src/agent/AgentMessage.ts`.
+This belongs in `src/agent/agent-message.ts`.
 
 The type is intentionally small. Real model APIs support more roles than this:
 system instructions, tool calls, tool results, and provider-specific message
@@ -123,10 +123,10 @@ That works once. It does not scale well. As soon as message creation is repeated
 across the CLI, tests, model calls, tools, and session loading, every call site
 has to remember the exact shape.
 
-Instead, create `src/agent/AgentMessageFactory.ts`:
+Instead, create `src/agent/agent-message-factory.ts`:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
+import type { AgentMessage } from "./agent-message";
 
 export class AgentMessageFactory {
   createUserMessage(content: string): AgentMessage {
@@ -173,8 +173,8 @@ Now we can name the central object for the chapter. A `Conversation` owns an
 ordered list of messages:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
-import { AgentMessageFactory } from "./AgentMessageFactory";
+import type { AgentMessage } from "./agent-message";
+import { AgentMessageFactory } from "./agent-message-factory";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -287,8 +287,8 @@ from the terminal, print to stdout, call a model, or persist a session.
 Full file:
 
 ```ts
-import type { AgentMessage } from "./AgentMessage";
-import { AgentMessageFactory } from "./AgentMessageFactory";
+import type { AgentMessage } from "./agent-message";
+import { AgentMessageFactory } from "./agent-message-factory";
 
 export class Conversation {
   private readonly messages: AgentMessage[];
@@ -333,9 +333,9 @@ Chapter 1 put the temporary helper in `src/index.ts`. This chapter turns
 `src/index.ts` into a barrel:
 
 ```ts
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
 ```
 
 A barrel file gives callers one stable import path:

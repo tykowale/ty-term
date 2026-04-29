@@ -98,30 +98,30 @@ Add a terminal folder:
 ```text
 src/
   agent/
-    AgentLoop.ts
-    AgentMessage.ts
-    AgentMessageFactory.ts
-    Conversation.ts
+    agent-loop.ts
+    agent-message.ts
+    agent-message-factory.ts
+    conversation.ts
   model/
-    EchoModelClient.ts
-    ModelClient.ts
-    ModelContext.ts
-    OpenAIModelClient.ts
+    echo-model-client.ts
+    model-client.ts
+    model-context.ts
+    openai-model-client.ts
   project/
-    ProjectInstructions.ts
+    project-instructions.ts
   session/
-    JsonlSessionStore.ts
-    SessionStore.ts
+    jsonl-session-store.ts
+    session-store.ts
   terminal/
-    InteractiveLoop.ts
-    parseArgs.ts
+    interactive-loop.ts
+    parse-args.ts
   tools/
-    BashTool.ts
-    CurrentDirectoryTool.ts
-    ReadFileTool.ts
-    Tool.ts
-    ToolRegistry.ts
-    ToolRequestParser.ts
+    bash-tool.ts
+    current-directory-tool.ts
+    read-file-tool.ts
+    tool.ts
+    tool-registry.ts
+    tool-request-parser.ts
   cli.ts
   index.ts
 tests/
@@ -136,7 +136,7 @@ not implement terminal behavior.
 Argument parsing is small, but it is still behavior. Pull it out before adding
 the loop so `cli.ts` does not become the dumping ground again.
 
-Create `src/terminal/parseArgs.ts`:
+Create `src/terminal/parse-args.ts`:
 
 ```ts
 export interface ParsedArgs {
@@ -223,14 +223,14 @@ The interactive loop should not duplicate that. It should ask for a line, hand
 that line to `AgentLoop`, display only the messages added by that turn, and
 repeat.
 
-Create `src/terminal/InteractiveLoop.ts`:
+Create `src/terminal/interactive-loop.ts`:
 
 ```ts
 import { createInterface } from "node:readline/promises";
-import type { AgentLoop } from "../agent/AgentLoop";
-import type { Conversation } from "../agent/Conversation";
-import type { ModelContext } from "../model/ModelContext";
-import type { SessionStore } from "../session/SessionStore";
+import type { AgentLoop } from "../agent/agent-loop";
+import type { Conversation } from "../agent/conversation";
+import type { ModelContext } from "../model/model-context";
+import type { SessionStore } from "../session/session-store";
 
 export interface InteractiveLoopOptions {
   readonly agentLoop: AgentLoop;
@@ -526,26 +526,26 @@ conversation messages.
 Update `src/index.ts`:
 
 ```ts
-export { AgentLoop } from "./agent/AgentLoop";
-export type { AgentMessage, AgentRole } from "./agent/AgentMessage";
-export { AgentMessageFactory } from "./agent/AgentMessageFactory";
-export { Conversation } from "./agent/Conversation";
-export { EchoModelClient } from "./model/EchoModelClient";
-export type { ModelClient } from "./model/ModelClient";
-export { ModelContext } from "./model/ModelContext";
+export { AgentLoop } from "./agent/agent-loop";
+export type { AgentMessage, AgentRole } from "./agent/agent-message";
+export { AgentMessageFactory } from "./agent/agent-message-factory";
+export { Conversation } from "./agent/conversation";
+export { EchoModelClient } from "./model/echo-model-client";
+export type { ModelClient } from "./model/model-client";
+export { ModelContext } from "./model/model-context";
 export {
   OpenAIModelClient,
   buildModelInstructions,
   type OpenAIResponsesClient,
-} from "./model/OpenAIModelClient";
-export { ProjectInstructions } from "./project/ProjectInstructions";
+} from "./model/openai-model-client";
+export { ProjectInstructions } from "./project/project-instructions";
 export {
   JsonlSessionStore,
   validateSessionId,
-} from "./session/JsonlSessionStore";
-export type { SessionStore } from "./session/SessionStore";
-export { InteractiveLoop } from "./terminal/InteractiveLoop";
-export { parseArgs, type ParsedArgs } from "./terminal/parseArgs";
+} from "./session/jsonl-session-store";
+export type { SessionStore } from "./session/session-store";
+export { InteractiveLoop } from "./terminal/interactive-loop";
+export { parseArgs, type ParsedArgs } from "./terminal/parse-args";
 export {
   BashTool,
   formatCommandResult,
@@ -553,16 +553,16 @@ export {
   type CommandOptions,
   type CommandResult,
   type CommandRunner,
-} from "./tools/BashTool";
-export { CurrentDirectoryTool } from "./tools/CurrentDirectoryTool";
+} from "./tools/bash-tool";
+export { CurrentDirectoryTool } from "./tools/current-directory-tool";
 export {
   ReadFileTool,
   resolveProjectFilePath,
   resolveProjectRoot,
-} from "./tools/ReadFileTool";
-export type { Tool } from "./tools/Tool";
-export { ToolRegistry } from "./tools/ToolRegistry";
-export { ToolRequestParser, type ToolRequest } from "./tools/ToolRequestParser";
+} from "./tools/read-file-tool";
+export type { Tool } from "./tools/tool";
+export { ToolRegistry } from "./tools/tool-registry";
+export { ToolRequestParser, type ToolRequest } from "./tools/tool-request-parser";
 ```
 
 Again, the barrel exports names. It does not become the place where logic lives.
