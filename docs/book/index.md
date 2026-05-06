@@ -9,7 +9,7 @@ The reference project is `pi-mono`, but this is not a clone. Each chapter extrac
 By the end, you will have a TypeScript command-line program that can:
 
 - keep a conversation as structured messages
-- call one hosted model provider through a subscription-shaped boundary
+- call one model provider through a local provider auth/config boundary
 - expose tools behind a typed boundary
 - run a bash command as a tool
 - let the model request and consume tool results
@@ -18,7 +18,7 @@ By the end, you will have a TypeScript command-line program that can:
 - load project instructions
 - run in a tiny interactive loop
 
-The production concerns in `pi-mono`, such as rich TUI rendering, optional extensions, branchable session trees, compaction, and multiple model providers, are intentionally out of scope for the core book. Chapter 3 keeps subscription setup outside the agent so the model boundary stays small.
+The production concerns in `pi-mono`, such as rich TUI rendering, optional extensions, branchable session trees, compaction, and multiple model providers, are intentionally out of scope for the core book. Chapter 3 keeps provider auth setup outside the agent so the model boundary stays small while still allowing OAuth/subscription-style credentials and API-key credentials to share one local config shape.
 
 ## Book Rule
 
@@ -28,7 +28,7 @@ Chapter 1 owns setup. If a later chapter needs a new dependency, Chapter 1 must 
 
 1. [Start a Bun TypeScript CLI](01-start-a-typescript-cli-workspace.md)
 2. [Represent a Conversation](02-represent-a-conversation.md)
-3. [Call One Hosted Model Provider](03-call-one-model-provider.md)
+3. [Call One Model Provider](03-call-one-model-provider.md)
 4. [Add a Tool Boundary](04-add-a-tool-boundary.md)
 5. [Execute a Bash Tool](05-execute-a-bash-tool.md)
 6. [Let the Model Use Tools](06-let-the-model-use-tools.md)
@@ -46,7 +46,9 @@ The spine artifacts that grow across the book are:
 - `AgentMessage`
 - `Conversation`
 - `ModelClient`
+- `ProviderAuth`
 - `ProviderConfig`
+- `ProviderCredentials`
 - `ToolDefinition`
 - `AgentLoop`
 - `SessionStore`

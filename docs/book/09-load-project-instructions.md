@@ -53,7 +53,7 @@ cli.ts composes dependencies and prints output.
 Chapter 9 keeps that split. The new project-instruction behavior does not
 belong in `Conversation`, because instructions are not messages. It does not
 belong in `JsonlSessionStore`, because the session store should persist only
-conversation records. It does not belong in `HostedModelClient`, because a model
+conversation records. It does not belong in `ProviderModelClient`, because a model
 provider should receive context, not know how to find files in the current
 project.
 
@@ -90,7 +90,9 @@ src/
     echo-model-client.ts
     model-client.ts
     model-context.ts
-    hosted-model-client.ts
+    provider-model-client.ts
+    provider-auth.ts
+    provider-config.ts
   project/
     project-instructions.ts
   session/
@@ -169,7 +171,8 @@ tool turn, both calls must receive the same `ModelContext`.
 ## EchoModelClient Accepts Context Without Using It
 
 The echo client is still a deterministic test double. It does not need project
-instructions, but it should implement the same interface as real providers.
+instructions, but it should implement the same interface as configured
+providers.
 
 Update `src/model/echo-model-client.ts`:
 
@@ -325,20 +328,22 @@ private formatForModel(): string {
 That keeps the author's text intact while avoiding a dangling blank block in
 provider instructions.
 
-## HostedModelClient Uses Context, Not Files
+## ProviderModelClient Uses Context, Not Files
 
 The provider class should not know about `AGENTS.md`. It should know how to
-convert a `Conversation` and a `ModelContext` into an OpenAI request.
+convert a `Conversation`, a `ModelContext`, and local provider config into a
+direct provider request.
 
-Update `src/model/hosted-model-client.ts`:
+Update `src/model/provider-model-client.ts`:
 
 ```ts
-import OpenAI from "openai";
 import type { Conversation } from "@/agent/conversation";
 import type { ModelClient } from "@/model/model-client";
 import type { ModelContext } from "@/model/model-context";
+import type { ProviderConfig } from "@/model/provider-config";
+import { createProviderResponsesClient } from "@/model/provider-auth";
 
-export interface OpenAIResponsesClient {
+export interface ProviderResponsesClient {
   responses: {
     create(options: {
       model: string;
@@ -348,15 +353,13 @@ export interface OpenAIResponsesClient {
   };
 }
 
-export class HostedModelClient implements ModelClient {
-  private readonly model: string;
-  private readonly client: OpenAIResponsesClient;
+export class ProviderModelClient implements ModelClient {
+  private readonly client: ProviderResponsesClient;
 
   constructor(
-    model = process.env.TY_TERM_PROVIDER_MODEL ?? "gpt-4.1-mini",
-    client: OpenAIResponsesClient = new OpenAI(),
+    private readonly config: ProviderConfig,
+    client: ProviderResponsesClient = createProviderResponsesClient(config),
   ) {
-    this.model = model;
     this.client = client;
   }
 
@@ -366,7 +369,7 @@ export class HostedModelClient implements ModelClient {
     context: ModelContext,
   ): Promise<string> {
     const response = await this.client.responses.create({
-      model: this.model,
+      model: this.config.model,
       instructions: buildModelInstructions(context),
       input: [conversation.renderTranscript(), prompt]
         .filter((part) => part.length > 0)
@@ -531,7 +534,8 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { HostedModelClient } from "@/model/hosted-model-client";
+import { ProviderAuthStore } from "@/model/provider-auth-store";
+import { ProviderModelClient } from "@/model/provider-model-client";
 import { ProjectInstructions } from "@/project/project-instructions";
 import {
   JsonlSessionStore,
@@ -543,7 +547,7 @@ import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useHostedModel: boolean;
+  readonly useProviderModel: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
   readonly toolInput?: string;
@@ -551,7 +555,7 @@ interface ParsedArgs {
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useHostedModel = false;
+  let useProviderModel = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
   let toolInput: string | undefined;
@@ -560,8 +564,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--hosted") {
-      useHostedModel = true;
+    if (arg === "--provider") {
+      useProviderModel = true;
       continue;
     }
 
@@ -587,7 +591,7 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useHostedModel,
+    useProviderModel,
     sessionId,
     toolName,
     toolInput,
@@ -621,7 +625,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--provider] "your prompt"',
     );
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
@@ -629,12 +633,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const providerConfig = parsed.useHostedModel
-    ? await loadProviderConfig()
+  const providerConfig = parsed.useProviderModel
+    ? await new ProviderAuthStore().loadProviderConfig()
     : undefined;
 
-  if (parsed.useHostedModel && !providerConfig) {
-    console.error("Run bun run setup:provider before using --hosted.");
+  if (parsed.useProviderModel && !providerConfig) {
+    console.error(
+      "Run bun run setup:provider to create or refresh local provider auth before using --provider.",
+    );
     process.exit(1);
   }
 
@@ -642,7 +648,7 @@ async function main(): Promise<void> {
   const modelContext = projectInstructions.toModelContext();
   const messageFactory = new AgentMessageFactory();
   const modelClient = providerConfig
-    ? new HostedModelClient(providerConfig)
+    ? new ProviderModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -768,7 +774,7 @@ import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import type { ModelClient } from "@/model/model-client";
 import { ModelContext } from "@/model/model-context";
-import { buildModelInstructions } from "@/model/hosted-model-client";
+import { buildModelInstructions } from "@/model/provider-model-client";
 import { JsonlSessionStore } from "@/session/jsonl-session-store";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
@@ -990,7 +996,7 @@ You now have:
 - `ProjectInstructions` loading `AGENTS.md`
 - empty model context when the file is missing
 - `ModelContext` passed through `AgentLoop`
-- `HostedModelClient` using context without loading files
+- `ProviderModelClient` using context without loading files
 - `JsonlSessionStore` still persisting only conversation messages
 - `cli.ts` composing project, session, tools, model, and agent objects
 

@@ -37,7 +37,8 @@ src/
   model/
     model-client.ts
     echo-model-client.ts
-    hosted-model-client.ts
+    provider-model-client.ts
+    provider-auth.ts
     provider-config.ts
     model-context.ts
 
@@ -75,10 +76,16 @@ before the chapter needs them.
 - `AgentLoop` owns orchestration once model calls, tool execution, model
   context, sessions, and project instructions interact.
 - `ModelClient` is an interface. Concrete providers are classes:
-  `EchoModelClient` and `HostedModelClient`.
-- `ProviderConfig` owns the local hosted-provider connection shape. Provider
-  setup happens outside the agent through `scripts/setup-provider.ts`; provider
-  API keys belong on the hosted service, not in the CLI.
+  `EchoModelClient` and `ProviderModelClient`.
+- `ProviderAuth` and `ProviderCredentials` own local provider identity and
+  secret material. They should allow more than one auth style: an
+  OAuth/subscription-style token flow and an API-key provider flow.
+- `ProviderConfig` owns the local provider connection shape: provider id,
+  model, base URL if needed, and credentials reference or inline credentials.
+  Provider setup happens outside the agent through `scripts/setup-provider.ts`,
+  which writes or refreshes local provider auth/config. The CLI should call the
+  selected provider through `ProviderModelClient`, using local credentials
+  instead of routing every model request through one remote broker.
 - `ToolRegistry` is a class that owns lookup and execution dispatch.
 - Tools are objects that implement a shared `Tool` interface.
 - `SessionStore` is an interface. `JsonlSessionStore` implements persistence.
@@ -171,12 +178,12 @@ Chapter 2 can let `Conversation.runTurn()` create the fake assistant response.
 The chapter must explain that this is temporary: when a real model and tools
 arrive, orchestration will move to `AgentLoop`.
 
-### Chapter 3: Call One Hosted Model Provider
+### Chapter 3: Call One Model Provider
 
 Introduce the model boundary as objects, not factory functions. Add
-`ModelClient`, `EchoModelClient`, `HostedModelClient`, and `ProviderConfig`.
-Keep subscription login and callback handling outside the agent for now as
-`scripts/setup-provider.ts`.
+`ModelClient`, `EchoModelClient`, `ProviderModelClient`, `ProviderAuth`,
+`ProviderCredentials`, and `ProviderConfig`. Keep provider login, token refresh,
+and API-key capture outside the agent for now as `scripts/setup-provider.ts`.
 
 Preferred direction: introduce `AgentLoop` here if it keeps `Conversation` from
 depending on model clients.
@@ -186,17 +193,19 @@ Likely files:
 - `src/agent/agent-loop.ts`
 - `src/model/model-client.ts`
 - `src/model/echo-model-client.ts`
-- `src/model/hosted-model-client.ts`
+- `src/model/provider-model-client.ts`
+- `src/model/provider-auth.ts`
 - `src/model/provider-config.ts`
 - `scripts/setup-provider.ts`
 - existing `agent` files
 - `src/cli.ts`
 - tests around `AgentLoop`
 
-The chapter should use a setup script as the temporary product boundary:
-eventually it can choose a provider in the browser, receive a localhost callback
-from the hosted auth service, and write provider config. Do not add in-agent
-login commands in Chapter 3.
+The chapter should use a setup script as the temporary product boundary. It can
+choose a provider, write local config, and either complete an OAuth-style local
+callback flow or record an API-key credential for providers that use keys. Do
+not add in-agent login commands in Chapter 3, and do not introduce a required
+remote broker between the CLI and every provider.
 
 ### Chapter 4: Add a Tool Boundary
 
@@ -279,7 +288,7 @@ Likely files:
 - `src/project/project-instructions.ts`
 - `src/model/model-context.ts`
 - `src/agent/agent-loop.ts`
-- `src/model/hosted-model-client.ts`
+- `src/model/provider-model-client.ts`
 
 ### Chapter 10: Build a Tiny Interactive Loop
 

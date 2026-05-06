@@ -1,4 +1,4 @@
-# Chapter 3: Call One Hosted Model Provider
+# Chapter 3: Call One Model Provider
 
 Chapter 2 gave the harness its first real domain objects:
 
@@ -21,27 +21,40 @@ append user message
 append fake assistant message
 ```
 
-This chapter changes that. A turn now crosses a model boundary, but it should
-not ask each reader to bring an OpenAI API key. In the product shape we are
-building toward, model access belongs behind the application subscription. The
-terminal harness receives an app-scoped provider token from setup and sends
-model requests to a hosted provider gateway.
+This chapter changes that. A turn now crosses a model boundary. That means
+`Conversation` should stop owning the turn. It should keep owning the data it is
+good at owning: message storage, safe access, and transcript rendering.
 
-The important restraint is timing: Chapter 3 should not add in-agent login
-commands, provider picker commands, localhost callback servers, or interactive
-auth. Those are product behaviors we can tie into the agent later. For now,
-setup stays outside the agent:
+The new owner is `AgentLoop`.
+
+The second boundary is provider auth. We do not want Chapter 3 to require every
+reader to export a provider-specific API key before the basic harness works.
+Tools like `pi` support both subscription providers and API-key providers, and
+they resolve both through local auth state. We will use the same shape here, but
+keep setup outside the agent for now:
 
 ```text
 bun run setup:provider
+  -> writes .ty-term/auth.json
+
+bun run dev -- "hello"
+  -> loads provider auth if present
+  -> otherwise uses EchoModelClient
 ```
 
-That setup script can open a browser, let the user choose a provider, listen for
-a callback, and write a local provider config file. The agent loop does not know
-how that happened. It only receives a `ModelClient`.
+That is the chapter boundary:
 
-The local chapter remains runnable without setup by keeping the echo client as
-the deterministic default:
+```text
+Provider setup creates local auth.
+The CLI loads local auth.
+AgentLoop only sees a ModelClient.
+```
+
+No in-agent login command yet. No callback server in the agent. Those are
+later terminal-product features. Chapter 3 only needs the shape that will let us
+plug them in later.
+
+The no-auth path stays deterministic:
 
 ```text
 $ bun run dev -- "hello"
@@ -51,14 +64,13 @@ assistant: agent heard: hello
 
 ## The New Boundary
 
-The important move in this chapter is not "add an API key." The important move
-is:
+The important move in this chapter is not "add OpenAI." The important move is:
 
 ```text
 Conversation owns history.
 AgentLoop owns orchestration.
-ModelClient owns model interaction.
-Provider setup stays outside the agent.
+ModelClient owns provider interaction.
+ProviderAuthStore owns local provider credentials.
 ```
 
 That separation gives each object a narrow job:
@@ -66,55 +78,54 @@ That separation gives each object a narrow job:
 - `Conversation` stores messages and renders a transcript.
 - `AgentLoop` decides what happens during one turn.
 - `ModelClient` turns conversation context into assistant text.
-- `scripts/setup-provider.ts` obtains and saves hosted-provider configuration.
-- `cli.ts` composes objects and prints the transcript.
+- `ProviderAuthStore` loads saved provider credentials.
+- `scripts/setup-provider.ts` writes development provider credentials.
+- `cli.ts` composes the objects and prints the result.
 
 This keeps the dependency direction clean:
 
 ```text
-setup script -> hosted auth service -> provider config file
+setup-provider.ts
+  -> .ty-term/auth.json
 
 cli.ts
-  -> load provider config when present
+  -> ProviderAuthStore
   -> AgentLoop
   -> Conversation + AgentMessageFactory + ModelClient
 ```
 
-`cli.ts` may load configuration and compose dependencies. It should not know how
-to perform a login callback. `Conversation` is allowed to know how to append
+`cli.ts` is allowed to know where local auth lives. It should not know how to
+build a provider request. `Conversation` is allowed to know how to append
 messages. It should not know whether assistant text came from an echo client, a
-hosted OpenAI-backed gateway, a local model, or a future tool-aware loop.
+subscription provider, an API-key provider, or a future tool-aware loop.
 
-## Why Not A Local Provider API Key
+## Why Local Auth Instead Of One Required Key
 
-A direct OpenAI API integration uses API keys. That is the right shape for a
-server-side gateway, but it is the wrong default lesson for this product.
-
-If we make Chapter 3 require a local provider API key, we teach readers that
-every local CLI user must provision platform credentials. That conflicts with
-the intended subscription experience:
+A direct OpenAI API integration uses API keys. That is still a valid provider
+auth type, but it should not be the only story the book teaches. The shape we
+want is closer to `pi`:
 
 ```text
-user signs in through setup
-app manages provider access
-setup stores an app-scoped provider token
-gateway performs provider calls
+subscription auth -> saved OAuth/session token in auth.json
+API-key auth      -> saved key or environment variable
+model client      -> reads resolved provider auth
 ```
 
-So this chapter treats provider access as application configuration. The setup
-script may eventually perform browser login and a callback, but that behavior is
-outside the agent for now. The callback does not mint an OpenAI API key for the
-user. It completes a login against our app's subscription service. The hosted
-service can then call OpenAI using server-held credentials, enforce
-entitlements, meter usage, switch providers, or deny access without changing the
-agent loop.
+So Chapter 3 creates a local provider-auth boundary instead of hard-coding one
+environment variable into the CLI.
 
-That distinction keeps the book honest:
+This keeps the book honest:
 
-- local tests do not need a network or provider account
-- the CLI does not store provider secrets
-- provider setup can evolve without touching `AgentLoop`
-- later chapters can keep using `ModelClient` without caring how billing works
+- tests do not need a provider account
+- the default CLI path remains no-cost and deterministic
+- subscription auth can become the normal path later
+- API keys can still be supported as one auth type
+- later chapters can keep using `ModelClient` without caring how auth was
+  acquired
+
+The setup script is intentionally outside the agent. In a later interactive
+chapter, the same auth file can be written by an interactive terminal command.
+We are not ready for that command vocabulary yet.
 
 ## Moving `runTurn()` Out Of `Conversation`
 
@@ -207,14 +218,13 @@ lesson. The first boundary is simply:
 AgentMessage[] -> assistant text
 ```
 
-It is async because hosted providers are async. Even the deterministic echo
-client implements the same async interface so the rest of the loop has one
-shape.
+It is async because real providers are async. Even the deterministic echo client
+implements the same async interface so the rest of the loop has one shape.
 
 ## A Deterministic Model Client
 
 Tests should not call a real model. They should not need credentials, network
-access, provider availability, subscription state, or stable model output.
+access, provider availability, or stable model output.
 
 So the first implementation is `src/model/echo-model-client.ts`:
 
@@ -238,91 +248,95 @@ only gives the loop a stable model-shaped dependency.
 
 It also proves why the interface accepts message history. The echo client could
 have accepted a single prompt, but then tests would not exercise the same shape
-that a hosted provider needs. By reading the latest user message from the
-context, the fake client behaves like a tiny implementation of the real
-boundary.
+that a real provider needs. By reading the latest user message from the context,
+the fake client behaves like a tiny implementation of the real boundary.
 
-## The Provider Config
+## Provider Auth
 
-Provider setup is not agent behavior yet. Give it a small data shape in
+Now create a small local-auth shape in `src/model/provider-auth.ts`:
+
+```ts
+export type ProviderCredentials =
+  | {
+      readonly type: "subscription";
+      readonly provider: "openai";
+      readonly accessToken: string;
+    }
+  | {
+      readonly type: "api_key";
+      readonly provider: "openai";
+      readonly key: string;
+    };
+
+export interface ProviderAuthFile {
+  readonly openai?: ProviderCredentials;
+}
+```
+
+This is deliberately small:
+
+- one provider, `openai`
+- two auth types, `subscription` and `api_key`
+- one local file shape
+
+The point is not to implement every provider in Chapter 3. The point is to stop
+pretending provider access is just one environment variable. A later chapter can
+add provider selection, model lists, auth refresh, logout, and more providers
+without changing the `ModelClient` interface.
+
+Now define the resolved config that a model client receives in
 `src/model/provider-config.ts`:
 
 ```ts
+import type { ProviderCredentials } from "@/model/provider-auth";
+
 export interface ProviderConfig {
-  readonly baseUrl: string;
-  readonly provider: string;
-  readonly token: string;
+  readonly provider: "openai";
+  readonly model: string;
+  readonly credentials: ProviderCredentials;
 }
 ```
 
-The setup script will write that shape to a local file such as
-`.ty-term/provider.json`:
+The auth file is storage. `ProviderConfig` is runtime configuration. Keeping
+those separate lets later chapters add model selection, base URLs, provider
+metadata, and credential refresh without changing `AgentLoop`.
 
-```json
-{
-  "baseUrl": "https://api.ty-term.example",
-  "provider": "openai",
-  "token": "app-scoped-provider-token"
-}
-```
+## The Auth Store
 
-This is intentionally not called `OpenAIConfig`. OpenAI is one hosted provider
-behind the application gateway. The local harness should depend on the app's
-provider contract, not on OpenAI credentials.
-
-In a production CLI, the token should live in the OS keychain or another
-protected store. This chapter can use a local JSON file because the lesson is
-the model boundary, not secure credential storage.
-
-## The Hosted Provider Client
-
-The real provider implementation talks to the app gateway, not directly to
-OpenAI:
+`ProviderAuthStore` owns reading the local auth file:
 
 ```ts
-import type { AgentMessage } from "@/agent/agent-message";
-import type { ModelClient } from "@/model/model-client";
+import { readFile } from "node:fs/promises";
+import type { ProviderAuthFile } from "@/model/provider-auth";
 import type { ProviderConfig } from "@/model/provider-config";
 
-export class HostedModelClient implements ModelClient {
-  constructor(private readonly config: ProviderConfig) {}
+export class ProviderAuthStore {
+  constructor(private readonly path = ".ty-term/auth.json") {}
 
-  async createResponse(messages: AgentMessage[]): Promise<string> {
-    const response = await fetch(`${this.config.baseUrl}/v1/responses`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        provider: this.config.provider,
-        messages,
-      }),
-    });
+  async loadProviderConfig(): Promise<ProviderConfig | undefined> {
+    try {
+      const rawAuth = await readFile(this.path, "utf8");
+      const authFile = JSON.parse(rawAuth) as ProviderAuthFile;
+      const credentials = authFile.openai;
 
-    if (!response.ok) {
-      throw new Error(`Hosted model request failed: ${response.status}`);
+      if (!credentials) {
+        return undefined;
+      }
+
+      return {
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        credentials,
+      };
+    } catch {
+      return undefined;
     }
-
-    const body = (await response.json()) as { outputText: string };
-    return body.outputText;
   }
 }
 ```
 
-This class hides the product-specific details:
-
-- where the hosted model endpoint lives
-- which provider setup selected
-- how the app-scoped token is sent
-- what response shape the gateway returns
-
-The rest of the harness only sees `ModelClient`.
-
-The chapter does not implement the gateway. The gateway is a product service,
-not part of the local terminal harness. For local learning, the echo client is
-the correctness oracle. For production shape, `HostedModelClient` shows the
-boundary the CLI will call after setup exists.
+The class does not validate every possible malformed file yet. It has one
+teaching job: keep auth-file I/O out of `cli.ts` and out of `AgentLoop`.
 
 ## The Setup Script
 
@@ -333,21 +347,26 @@ The chapter can start with a development version:
 ```ts
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { ProviderConfig } from "@/model/provider-config";
+import type { ProviderAuthFile } from "@/model/provider-auth";
 
-const configPath = ".ty-term/provider.json";
+const authPath = ".ty-term/auth.json";
+const authType = process.env.TY_TERM_PROVIDER_AUTH_TYPE ?? "subscription";
+const token = process.env.TY_TERM_PROVIDER_TOKEN ?? "dev-token";
 
-const config: ProviderConfig = {
-  baseUrl:
-    process.env.TY_TERM_PROVIDER_BASE_URL ?? "https://api.ty-term.example",
-  provider: process.env.TY_TERM_PROVIDER ?? "openai",
-  token: process.env.TY_TERM_PROVIDER_TOKEN ?? "dev-token",
+const authFile: ProviderAuthFile = {
+  openai:
+    authType === "api_key"
+      ? { type: "api_key", provider: "openai", key: token }
+      : { type: "subscription", provider: "openai", accessToken: token },
 };
 
-await mkdir(dirname(configPath), { recursive: true });
-await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+await mkdir(dirname(authPath), { recursive: true });
+await writeFile(authPath, `${JSON.stringify(authFile, null, 2)}\n`, {
+  encoding: "utf8",
+  mode: 0o600,
+});
 
-console.log(`wrote ${configPath} for ${config.provider}`);
+console.log(`wrote ${authPath} for openai ${authFile.openai.type} auth`);
 ```
 
 Then add a package script:
@@ -360,18 +379,69 @@ Then add a package script:
 }
 ```
 
-Later, the same script can grow into the real flow:
+Later, the same setup boundary can grow into a real subscription flow:
 
 ```text
-setup script asks hosted auth service for a login URL
-user chooses a provider in the browser
-hosted auth service redirects to a localhost callback
-setup script writes provider config
+setup script opens browser
+user signs in with subscription provider
+provider redirects to localhost callback
+setup script writes refreshed auth.json
 ```
 
 That later growth does not require `AgentLoop` to change. It also does not force
-Chapter 3 to teach callback servers before the harness has even learned tools,
+Chapter 3 to teach callback servers before the harness has learned tools,
 sessions, or an interactive loop.
+
+## A Real Provider Client
+
+The real-provider implementation depends on provider auth, not on process
+environment:
+
+```ts
+import OpenAI from "openai";
+import type { AgentMessage } from "@/agent/agent-message";
+import type { ModelClient } from "@/model/model-client";
+import type { ProviderConfig } from "@/model/provider-config";
+
+export class ProviderModelClient implements ModelClient {
+  private readonly client: OpenAI;
+
+  constructor(private readonly config: ProviderConfig) {
+    if (config.provider !== "openai") {
+      throw new Error(`Unsupported provider: ${config.provider}`);
+    }
+
+    if (config.credentials.type !== "api_key") {
+      throw new Error(
+        "subscription auth transport is added in a later chapter",
+      );
+    }
+
+    this.client = new OpenAI({ apiKey: config.credentials.key });
+  }
+
+  async createResponse(messages: AgentMessage[]): Promise<string> {
+    const response = await this.client.responses.create({
+      model: this.config.model,
+      input: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    });
+
+    return response.output_text;
+  }
+}
+```
+
+The constructor guard is honest. Chapter 3 teaches the auth shape that can hold
+subscription credentials, but it does not implement the subscription transport
+yet. That can come later, when the book is ready to teach provider-specific auth
+refresh and request plumbing.
+
+The important part is that `ProviderModelClient` receives resolved provider
+config. It does not read `process.env` itself, and `AgentLoop` does not know
+what kind of auth was used.
 
 ## The Agent Loop
 
@@ -415,7 +485,7 @@ append user + assistant to the conversation
 ```
 
 The loop asks the model before mutating the conversation. That means a failed
-hosted call does not leave a half-written turn with a user message but no
+model call does not leave a half-written turn with a user message but no
 assistant message. That is a deliberate invariant for this chapter:
 
 ```text
@@ -427,31 +497,19 @@ deliberate design change, not an accident caused by mutation order.
 
 ## The CLI Composes Dependencies
 
-The CLI still has one job: run one prompt. It may choose a hosted model client
-if setup has produced a provider config file, but it does not perform setup.
+The CLI now chooses a model client and wires the objects together.
 
 `src/cli.ts`:
 
 ```ts
 #!/usr/bin/env bun
 
-import { readFile } from "node:fs/promises";
 import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { HostedModelClient } from "@/model/hosted-model-client";
-import type { ModelClient } from "@/model/model-client";
-import type { ProviderConfig } from "@/model/provider-config";
-
-async function loadProviderConfig(): Promise<ProviderConfig | undefined> {
-  try {
-    const rawConfig = await readFile(".ty-term/provider.json", "utf8");
-    return JSON.parse(rawConfig) as ProviderConfig;
-  } catch {
-    return undefined;
-  }
-}
+import { ProviderModelClient } from "@/model/provider-model-client";
+import { ProviderAuthStore } from "@/model/provider-auth-store";
 
 const prompt = process.argv.slice(2).join(" ");
 
@@ -460,11 +518,13 @@ if (prompt.length === 0) {
   process.exit(1);
 }
 
-const providerConfig = await loadProviderConfig();
+const providerAuthStore = new ProviderAuthStore();
+const providerConfig = await providerAuthStore.loadProviderConfig();
 const messageFactory = new AgentMessageFactory();
-const modelClient: ModelClient = providerConfig
-  ? new HostedModelClient(providerConfig)
-  : new EchoModelClient();
+const modelClient =
+  providerConfig?.credentials.type === "api_key"
+    ? new ProviderModelClient(providerConfig)
+    : new EchoModelClient();
 const agentLoop = new AgentLoop(messageFactory, modelClient);
 const conversation = new Conversation();
 
@@ -473,16 +533,22 @@ await agentLoop.runTurn(conversation, prompt);
 console.log(conversation.renderTranscript());
 ```
 
-This is intentionally still a teaching version:
+This file still has a few responsibilities, but they are process-level
+responsibilities:
 
-- setup is a separate script
-- the CLI has no in-agent login command
-- no callback server appears in the agent code
-- no OpenAI API key is read from the shell
+- read process arguments
+- reject a missing prompt
+- load local provider auth
+- choose the model client for this process
+- construct the objects for this process
+- print the transcript
 
-That is enough to move the architecture in the right direction. The CLI chooses
-between a deterministic local client and an authenticated hosted client. It
-does not know how OpenAI requests are made behind the gateway.
+It does not build messages, call the provider SDK, append conversation history,
+or render transcript lines itself.
+
+Notice the fallback: if setup has not produced usable provider auth, the CLI
+uses `EchoModelClient`. That keeps the chapter runnable and keeps provider setup
+from becoming a prerequisite for learning the architecture.
 
 ## The Tests
 
@@ -492,7 +558,7 @@ The tests should lock down the object boundaries:
 - `AgentLoop` appends a complete user/assistant turn.
 - `AgentLoop` passes prior context to the model.
 - `Conversation` still renders the final transcript.
-- `HostedModelClient` sends the app-scoped token, not an OpenAI API key.
+- `ProviderAuthStore` reads local auth without involving `AgentLoop`.
 
 Start with `tests/agent-loop.test.ts`:
 
@@ -576,14 +642,9 @@ describe("AgentLoop", () => {
 });
 ```
 
-If you test `HostedModelClient`, keep the test focused on the HTTP contract. It
-should assert that the request uses the app-scoped token:
-
-```text
-authorization: Bearer dev-token
-```
-
-Do not snapshot real model output. Do not call OpenAI from the test suite.
+Keep real provider calls out of the test suite. If you test auth loading, use a
+temporary auth file and assert the parsed structure. Do not snapshot model
+output.
 
 ## Try It
 
@@ -618,25 +679,36 @@ user: hello
 assistant: agent heard: hello
 ```
 
-Prepare hosted-provider config during development:
+Write development provider auth:
 
 ```bash
-TY_TERM_PROVIDER_TOKEN=dev-token bun run setup:provider
+TY_TERM_PROVIDER_AUTH_TYPE=api_key TY_TERM_PROVIDER_TOKEN=sk-... bun run setup:provider
 ```
 
 Expected output:
 
 ```text
-wrote .ty-term/provider.json for openai
+wrote .ty-term/auth.json for openai api_key auth
 ```
 
-After that, the same prompt command can use the hosted model path:
+Then run the same prompt command:
 
 ```bash
 bun run dev -- "Explain a model boundary in one sentence"
 ```
 
-The exact assistant text will vary because that path calls the hosted gateway.
+The exact assistant text will vary if this path calls the real provider.
+
+If setup writes subscription auth instead, Chapter 3 still falls back to echo
+until a later chapter adds the subscription transport:
+
+```bash
+TY_TERM_PROVIDER_AUTH_TYPE=subscription TY_TERM_PROVIDER_TOKEN=dev-token bun run setup:provider
+bun run dev -- "hello"
+```
+
+That is an intentional simplification. The file shape is ready for subscription
+auth, but the real request path remains small.
 
 ## How It Works
 
@@ -644,12 +716,13 @@ The chapter's data flow is:
 
 ```text
 bun run setup:provider
-  -> writes .ty-term/provider.json
+  -> writes .ty-term/auth.json
 
 cli.ts
+  -> new ProviderAuthStore()
   -> load provider config if present
+  -> new EchoModelClient() or new ProviderModelClient(config)
   -> new AgentMessageFactory()
-  -> new EchoModelClient() or new HostedModelClient(config)
   -> new AgentLoop(messageFactory, modelClient)
   -> new Conversation()
   -> await agentLoop.runTurn(conversation, prompt)
@@ -669,9 +742,9 @@ AgentLoop.runTurn(conversation, prompt)
 That keeps `Conversation` from turning into a god object. It owns state. It does
 not own provider calls.
 
-The `ModelClient` interface is also deliberately small. It does not expose
-provider SDK objects, request options, streaming events, retries, billing, or
-provider-specific response shapes. The loop asks for assistant text and
+The `ModelClient` interface is also deliberately small. It does not expose SDK
+objects, request options, streaming events, retries, auth refresh, model lists,
+or provider-specific response shapes. The loop asks for assistant text and
 receives assistant text.
 
 That is enough for one model call. Future chapters will widen this boundary only
@@ -682,33 +755,36 @@ when the code needs more behavior.
 We are deliberately not adding:
 
 - in-agent login commands
-- a real hosted auth service
+- subscription OAuth transport
+- token refresh
+- provider model lists
+- logout
 - OS keychain integration
 - browser launching
-- CSRF/state validation for the callback
+- callback server handling
 - streaming output
 - system or developer messages
 - tool calls
 - retries
 - token counting
 - conversation truncation
-- multiple direct model vendors
+- multiple real model vendors
 - snapshot tests for real model output
 
 Those are real concerns, but adding them here would hide the lesson. The lesson
-is that model access is a boundary, and in this product that boundary is
-subscription-backed. Orchestration belongs in `AgentLoop`, setup belongs outside
-the agent, and provider credentials belong on the hosted service.
+is that a model call is a boundary, provider auth is a separate boundary, and
+orchestration belongs in `AgentLoop`, not in `Conversation` or `cli.ts`.
 
 ## Handoff To Chapter 4
 
-Chapter 3 gives the harness a model boundary and a real orchestration object:
+Chapter 3 gives the harness a model boundary, a real orchestration object, and a
+local provider-auth boundary:
 
 ```text
-AgentLoop + ModelClient
+AgentLoop + ModelClient + ProviderAuthStore
 ```
 
-It also leaves a setup script outside the agent:
+It also leaves setup outside the agent:
 
 ```text
 scripts/setup-provider.ts
@@ -729,6 +805,7 @@ The continuity rule for Chapter 4 is the same one this chapter followed:
 ```text
 Conversation stores and renders messages.
 AgentLoop orchestrates the turn.
+ProviderAuthStore owns local provider auth.
 ToolRegistry owns tool lookup and execution dispatch.
 ```
 

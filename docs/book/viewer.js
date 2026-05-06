@@ -2,7 +2,7 @@ const chapters = [
   ["index.md", "Overview"],
   ["01-start-a-typescript-cli-workspace.md", "01. TypeScript CLI"],
   ["02-represent-a-conversation.md", "02. Represent a Conversation"],
-  ["03-call-one-model-provider.md", "03. Call One Hosted Model Provider"],
+  ["03-call-one-model-provider.md", "03. Call One Model Provider"],
   ["04-add-a-tool-boundary.md", "04. Add a Tool Boundary"],
   ["05-execute-a-bash-tool.md", "05. Execute a Bash Tool"],
   ["06-let-the-model-use-tools.md", "06. Let the Model Use Tools"],

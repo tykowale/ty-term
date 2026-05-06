@@ -106,7 +106,9 @@ src/
     echo-model-client.ts
     model-client.ts
     model-context.ts
-    hosted-model-client.ts
+    provider-model-client.ts
+    provider-auth.ts
+    provider-config.ts
   project/
     project-instructions.ts
   session/
@@ -136,7 +138,7 @@ Create `src/terminal/parse-args.ts`:
 
 ```ts
 export interface ParsedArgs {
-  readonly useHostedModel: boolean;
+  readonly useProviderModel: boolean;
   readonly interactive: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
@@ -145,7 +147,7 @@ export interface ParsedArgs {
 }
 
 export function parseArgs(args: string[]): ParsedArgs {
-  let useHostedModel = false;
+  let useProviderModel = false;
   let interactive = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
@@ -155,8 +157,8 @@ export function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--hosted") {
-      useHostedModel = true;
+    if (arg === "--provider") {
+      useProviderModel = true;
       continue;
     }
 
@@ -193,7 +195,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useHostedModel,
+    useProviderModel,
     interactive,
     sessionId,
     toolName,
@@ -376,7 +378,8 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { HostedModelClient } from "@/model/hosted-model-client";
+import { ProviderAuthStore } from "@/model/provider-auth-store";
+import { ProviderModelClient } from "@/model/provider-model-client";
 import { ProjectInstructions } from "@/project/project-instructions";
 import {
   JsonlSessionStore,
@@ -416,7 +419,7 @@ async function main(): Promise<void> {
   if (!parsed.interactive && parsed.prompt.length === 0) {
     process.stderr.write(
       [
-        'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
+        'Usage: bun run dev -- [--session id] [--provider] "your prompt"',
         "       bun run dev -- --interactive",
         "       bun run dev -- --tool cwd",
         '       bun run dev -- --tool bash "pwd"',
@@ -427,12 +430,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const providerConfig = parsed.useHostedModel
-    ? await loadProviderConfig()
+  const providerConfig = parsed.useProviderModel
+    ? await new ProviderAuthStore().loadProviderConfig()
     : undefined;
 
-  if (parsed.useHostedModel && !providerConfig) {
-    process.stderr.write("Run bun run setup:provider before using --hosted.\n");
+  if (parsed.useProviderModel && !providerConfig) {
+    process.stderr.write(
+      "Run bun run setup:provider to create or refresh local provider auth before using --provider.\n",
+    );
     process.exit(1);
   }
 
@@ -440,7 +445,7 @@ async function main(): Promise<void> {
   const modelContext = projectInstructions.toModelContext();
   const messageFactory = new AgentMessageFactory();
   const modelClient = providerConfig
-    ? new HostedModelClient(providerConfig)
+    ? new ProviderModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -645,13 +650,13 @@ Test the flags first:
 describe("parseArgs", () => {
   it("parses long and short interactive flags", () => {
     expect(parseArgs(["--interactive", "hello"])).toEqual({
-      useHostedModel: false,
+      useProviderModel: false,
       interactive: true,
       prompt: "hello",
     });
 
     expect(parseArgs(["-i", "--session", "lesson-10"])).toEqual({
-      useHostedModel: false,
+      useProviderModel: false,
       interactive: true,
       sessionId: "lesson-10",
       prompt: "",
@@ -889,11 +894,11 @@ Run a piped smoke test:
 printf "hello\n/exit\n" | bun run dev -- --interactive --session smoke
 ```
 
-Run with the hosted provider path after setup:
+Run with the configured provider path after setup:
 
 ```bash
 bun run setup:provider
-bun run dev -- --interactive --hosted
+bun run dev -- --interactive --provider
 ```
 
 ## Verification
@@ -946,7 +951,7 @@ At this point, `ty-term` has the spine of a tiny terminal coding harness:
 - a TypeScript package rooted at `ty-term`
 - a conversation representation
 - a model client boundary
-- a hosted model path backed by setup-provider config
+- a provider model path backed by local provider auth/config
 - a no-key echo model for tests and learning
 - a tool definition and registry
 - manual tools for `cwd`, `bash`, and `read_file`

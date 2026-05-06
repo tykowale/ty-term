@@ -50,7 +50,9 @@ src/
   model/
     echo-model-client.ts
     model-client.ts
-    hosted-model-client.ts
+    provider-model-client.ts
+    provider-auth.ts
+    provider-config.ts
   tools/
     bash-tool.ts
     current-directory-tool.ts
@@ -293,20 +295,21 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { HostedModelClient } from "@/model/hosted-model-client";
+import { ProviderAuthStore } from "@/model/provider-auth-store";
+import { ProviderModelClient } from "@/model/provider-model-client";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useHostedModel: boolean;
+  readonly useProviderModel: boolean;
   readonly toolName?: string;
   readonly toolInput?: string;
   readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useHostedModel = false;
+  let useProviderModel = false;
   let toolName: string | undefined;
   let toolInput: string | undefined;
   const promptParts: string[] = [];
@@ -314,8 +317,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--hosted") {
-      useHostedModel = true;
+    if (arg === "--provider") {
+      useProviderModel = true;
       continue;
     }
 
@@ -328,7 +331,12 @@ function parseArgs(args: string[]): ParsedArgs {
     promptParts.push(arg);
   }
 
-  return { useHostedModel, toolName, toolInput, prompt: promptParts.join(" ") };
+  return {
+    useProviderModel,
+    toolName,
+    toolInput,
+    prompt: promptParts.join(" "),
+  };
 }
 
 async function main(): Promise<void> {
@@ -350,24 +358,26 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: bun run dev -- [--hosted] "your prompt"');
+    console.error('Usage: bun run dev -- [--provider] "your prompt"');
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
     process.exit(1);
   }
 
-  const providerConfig = parsed.useHostedModel
-    ? await loadProviderConfig()
+  const providerConfig = parsed.useProviderModel
+    ? await new ProviderAuthStore().loadProviderConfig()
     : undefined;
 
-  if (parsed.useHostedModel && !providerConfig) {
-    console.error("Run bun run setup:provider before using --hosted.");
+  if (parsed.useProviderModel && !providerConfig) {
+    console.error(
+      "Run bun run setup:provider to create or refresh local provider auth before using --provider.",
+    );
     process.exit(1);
   }
 
   const messageFactory = new AgentMessageFactory();
   const modelClient = providerConfig
-    ? new HostedModelClient(providerConfig)
+    ? new ProviderModelClient(providerConfig)
     : new EchoModelClient();
   const agentLoop = new AgentLoop(messageFactory, modelClient);
   const conversation = new Conversation();
@@ -642,7 +652,7 @@ The existing prompt path stays unchanged:
 ```text
 cli.ts
   -> new AgentMessageFactory()
-  -> new EchoModelClient() or new HostedModelClient(config)
+  -> new EchoModelClient() or new ProviderModelClient(config)
   -> new AgentLoop(messageFactory, modelClient)
   -> new Conversation()
   -> await agentLoop.runTurn(conversation, prompt)

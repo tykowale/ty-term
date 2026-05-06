@@ -115,7 +115,9 @@ src/
   model/
     echo-model-client.ts
     model-client.ts
-    hosted-model-client.ts
+    provider-model-client.ts
+    provider-auth.ts
+    provider-config.ts
   session/
     jsonl-session-store.ts
     session-store.ts
@@ -447,7 +449,8 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { HostedModelClient } from "@/model/hosted-model-client";
+import { ProviderAuthStore } from "@/model/provider-auth-store";
+import { ProviderModelClient } from "@/model/provider-model-client";
 import {
   JsonlSessionStore,
   validateSessionId,
@@ -458,7 +461,7 @@ import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useHostedModel: boolean;
+  readonly useProviderModel: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
   readonly toolInput?: string;
@@ -466,7 +469,7 @@ interface ParsedArgs {
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useHostedModel = false;
+  let useProviderModel = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
   let toolInput: string | undefined;
@@ -475,8 +478,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--hosted") {
-      useHostedModel = true;
+    if (arg === "--provider") {
+      useProviderModel = true;
       continue;
     }
 
@@ -502,7 +505,7 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useHostedModel,
+    useProviderModel,
     sessionId,
     toolName,
     toolInput,
@@ -536,7 +539,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--provider] "your prompt"',
     );
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
@@ -544,18 +547,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const providerConfig = parsed.useHostedModel
-    ? await loadProviderConfig()
+  const providerConfig = parsed.useProviderModel
+    ? await new ProviderAuthStore().loadProviderConfig()
     : undefined;
 
-  if (parsed.useHostedModel && !providerConfig) {
-    console.error("Run bun run setup:provider before using --hosted.");
+  if (parsed.useProviderModel && !providerConfig) {
+    console.error(
+      "Run bun run setup:provider to create or refresh local provider auth before using --provider.",
+    );
     process.exit(1);
   }
 
   const messageFactory = new AgentMessageFactory();
   const modelClient = providerConfig
-    ? new HostedModelClient(providerConfig)
+    ? new ProviderModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -615,7 +620,7 @@ constructor call. It receives a `Conversation` and runs one turn.
 The CLI does know about process concerns:
 
 - `process.argv`
-- hosted provider config from setup
+- local provider auth/config from setup
 - project root selection
 - dependency construction
 - stdout and stderr
@@ -892,7 +897,7 @@ Session id may contain only letters, numbers, dash, and underscore.
 This should also fail because the flag has no id:
 
 ```bash
-bun run dev -- --session --hosted "hello"
+bun run dev -- --session --provider "hello"
 ```
 
 Expected error:
