@@ -115,7 +115,7 @@ src/
   model/
     echo-model-client.ts
     model-client.ts
-    openai-model-client.ts
+    hosted-model-client.ts
   session/
     jsonl-session-store.ts
     session-store.ts
@@ -447,21 +447,18 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { OpenAIModelClient } from "@/model/openai-model-client";
+import { HostedModelClient } from "@/model/hosted-model-client";
 import {
   JsonlSessionStore,
   validateSessionId,
 } from "@/session/jsonl-session-store";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-import {
-  ReadFileTool,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
+import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useOpenAI: boolean;
+  readonly useHostedModel: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
   readonly toolInput?: string;
@@ -469,7 +466,7 @@ interface ParsedArgs {
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useOpenAI = false;
+  let useHostedModel = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
   let toolInput: string | undefined;
@@ -478,8 +475,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--openai") {
-      useOpenAI = true;
+    if (arg === "--hosted") {
+      useHostedModel = true;
       continue;
     }
 
@@ -505,7 +502,7 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useOpenAI,
+    useHostedModel,
     sessionId,
     toolName,
     toolInput,
@@ -539,7 +536,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
     );
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
@@ -547,14 +544,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is required when using --openai.");
+  const providerConfig = parsed.useHostedModel
+    ? await loadProviderConfig()
+    : undefined;
+
+  if (parsed.useHostedModel && !providerConfig) {
+    console.error("Run bun run setup:provider before using --hosted.");
     process.exit(1);
   }
 
   const messageFactory = new AgentMessageFactory();
-  const modelClient = parsed.useOpenAI
-    ? new OpenAIModelClient()
+  const modelClient = providerConfig
+    ? new HostedModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -614,7 +615,7 @@ constructor call. It receives a `Conversation` and runs one turn.
 The CLI does know about process concerns:
 
 - `process.argv`
-- `process.env.OPENAI_API_KEY`
+- hosted provider config from setup
 - project root selection
 - dependency construction
 - stdout and stderr
@@ -891,7 +892,7 @@ Session id may contain only letters, numbers, dash, and underscore.
 This should also fail because the flag has no id:
 
 ```bash
-bun run dev -- --session --openai "hello"
+bun run dev -- --session --hosted "hello"
 ```
 
 Expected error:

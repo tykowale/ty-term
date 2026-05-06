@@ -50,7 +50,7 @@ src/
   model/
     echo-model-client.ts
     model-client.ts
-    openai-model-client.ts
+    hosted-model-client.ts
   tools/
     bash-tool.ts
     current-directory-tool.ts
@@ -293,20 +293,20 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { OpenAIModelClient } from "@/model/openai-model-client";
+import { HostedModelClient } from "@/model/hosted-model-client";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useOpenAI: boolean;
+  readonly useHostedModel: boolean;
   readonly toolName?: string;
   readonly toolInput?: string;
   readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useOpenAI = false;
+  let useHostedModel = false;
   let toolName: string | undefined;
   let toolInput: string | undefined;
   const promptParts: string[] = [];
@@ -314,8 +314,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--openai") {
-      useOpenAI = true;
+    if (arg === "--hosted") {
+      useHostedModel = true;
       continue;
     }
 
@@ -328,7 +328,7 @@ function parseArgs(args: string[]): ParsedArgs {
     promptParts.push(arg);
   }
 
-  return { useOpenAI, toolName, toolInput, prompt: promptParts.join(" ") };
+  return { useHostedModel, toolName, toolInput, prompt: promptParts.join(" ") };
 }
 
 async function main(): Promise<void> {
@@ -350,20 +350,24 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--hosted] "your prompt"');
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
     process.exit(1);
   }
 
-  if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is required when using --openai.");
+  const providerConfig = parsed.useHostedModel
+    ? await loadProviderConfig()
+    : undefined;
+
+  if (parsed.useHostedModel && !providerConfig) {
+    console.error("Run bun run setup:provider before using --hosted.");
     process.exit(1);
   }
 
   const messageFactory = new AgentMessageFactory();
-  const modelClient = parsed.useOpenAI
-    ? new OpenAIModelClient()
+  const modelClient = providerConfig
+    ? new HostedModelClient(providerConfig)
     : new EchoModelClient();
   const agentLoop = new AgentLoop(messageFactory, modelClient);
   const conversation = new Conversation();
@@ -638,7 +642,7 @@ The existing prompt path stays unchanged:
 ```text
 cli.ts
   -> new AgentMessageFactory()
-  -> new EchoModelClient() or new OpenAIModelClient()
+  -> new EchoModelClient() or new HostedModelClient(config)
   -> new AgentLoop(messageFactory, modelClient)
   -> new Conversation()
   -> await agentLoop.runTurn(conversation, prompt)

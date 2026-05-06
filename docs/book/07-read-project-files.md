@@ -112,7 +112,7 @@ src/
   model/
     echo-model-client.ts
     model-client.ts
-    openai-model-client.ts
+    hosted-model-client.ts
   tools/
     bash-tool.ts
     current-directory-tool.ts
@@ -299,22 +299,23 @@ result through `ToolRegistry`.
 
 ## The Real Provider Gets One More Instruction
 
-`OpenAIModelClient` still hides provider-specific details behind the
+`HostedModelClient` still hides provider-specific details behind the
 `ModelClient` interface. It only needs to update its instructions so the model
 knows the new text protocol.
 
-`src/model/openai-model-client.ts`:
+`src/model/hosted-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
 import type { AgentMessage } from "@/agent/agent-message";
 import type { ModelClient } from "@/model/model-client";
 
-export class OpenAIModelClient implements ModelClient {
+export class HostedModelClient implements ModelClient {
   private readonly client: OpenAI;
 
   constructor(
-    private readonly model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    private readonly model = process.env.TY_TERM_PROVIDER_MODEL ??
+      "gpt-4.1-mini",
     client = new OpenAI(),
   ) {
     this.client = client;
@@ -405,24 +406,21 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { OpenAIModelClient } from "@/model/openai-model-client";
+import { HostedModelClient } from "@/model/hosted-model-client";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-import {
-  ReadFileTool,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
+import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useOpenAI: boolean;
+  readonly useHostedModel: boolean;
   readonly toolName?: string;
   readonly toolInput?: string;
   readonly prompt: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useOpenAI = false;
+  let useHostedModel = false;
   let toolName: string | undefined;
   let toolInput: string | undefined;
   const promptParts: string[] = [];
@@ -430,8 +428,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--openai") {
-      useOpenAI = true;
+    if (arg === "--hosted") {
+      useHostedModel = true;
       continue;
     }
 
@@ -444,7 +442,7 @@ function parseArgs(args: string[]): ParsedArgs {
     promptParts.push(arg);
   }
 
-  return { useOpenAI, toolName, toolInput, prompt: promptParts.join(" ") };
+  return { useHostedModel, toolName, toolInput, prompt: promptParts.join(" ") };
 }
 
 async function main(): Promise<void> {
@@ -468,21 +466,25 @@ async function main(): Promise<void> {
   }
 
   if (parsed.prompt.length === 0) {
-    console.error('Usage: bun run dev -- [--openai] "your prompt"');
+    console.error('Usage: bun run dev -- [--hosted] "your prompt"');
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
     console.error("       bun run dev -- --tool read_file package.json");
     process.exit(1);
   }
 
-  if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is required when using --openai.");
+  const providerConfig = parsed.useHostedModel
+    ? await loadProviderConfig()
+    : undefined;
+
+  if (parsed.useHostedModel && !providerConfig) {
+    console.error("Run bun run setup:provider before using --hosted.");
     process.exit(1);
   }
 
   const messageFactory = new AgentMessageFactory();
-  const modelClient = parsed.useOpenAI
-    ? new OpenAIModelClient()
+  const modelClient = providerConfig
+    ? new HostedModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -550,10 +552,7 @@ directories so they do not depend on the actual repository checkout.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  ReadFileTool,
-  resolveProjectFilePath,
-} from "@/tools/read-file-tool";
+import { ReadFileTool, resolveProjectFilePath } from "@/tools/read-file-tool";
 
 async function withTempProject<T>(
   callback: (projectRoot: string) => Promise<T>,

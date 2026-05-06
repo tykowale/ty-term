@@ -53,7 +53,7 @@ cli.ts composes dependencies and prints output.
 Chapter 9 keeps that split. The new project-instruction behavior does not
 belong in `Conversation`, because instructions are not messages. It does not
 belong in `JsonlSessionStore`, because the session store should persist only
-conversation records. It does not belong in `OpenAIModelClient`, because a model
+conversation records. It does not belong in `HostedModelClient`, because a model
 provider should receive context, not know how to find files in the current
 project.
 
@@ -90,7 +90,7 @@ src/
     echo-model-client.ts
     model-client.ts
     model-context.ts
-    openai-model-client.ts
+    hosted-model-client.ts
   project/
     project-instructions.ts
   session/
@@ -325,12 +325,12 @@ private formatForModel(): string {
 That keeps the author's text intact while avoiding a dangling blank block in
 provider instructions.
 
-## OpenAIModelClient Uses Context, Not Files
+## HostedModelClient Uses Context, Not Files
 
 The provider class should not know about `AGENTS.md`. It should know how to
 convert a `Conversation` and a `ModelContext` into an OpenAI request.
 
-Update `src/model/openai-model-client.ts`:
+Update `src/model/hosted-model-client.ts`:
 
 ```ts
 import OpenAI from "openai";
@@ -348,12 +348,12 @@ export interface OpenAIResponsesClient {
   };
 }
 
-export class OpenAIModelClient implements ModelClient {
+export class HostedModelClient implements ModelClient {
   private readonly model: string;
   private readonly client: OpenAIResponsesClient;
 
   constructor(
-    model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini",
+    model = process.env.TY_TERM_PROVIDER_MODEL ?? "gpt-4.1-mini",
     client: OpenAIResponsesClient = new OpenAI(),
   ) {
     this.model = model;
@@ -531,7 +531,7 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { OpenAIModelClient } from "@/model/openai-model-client";
+import { HostedModelClient } from "@/model/hosted-model-client";
 import { ProjectInstructions } from "@/project/project-instructions";
 import {
   JsonlSessionStore,
@@ -539,14 +539,11 @@ import {
 } from "@/session/jsonl-session-store";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-import {
-  ReadFileTool,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
+import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 interface ParsedArgs {
-  readonly useOpenAI: boolean;
+  readonly useHostedModel: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
   readonly toolInput?: string;
@@ -554,7 +551,7 @@ interface ParsedArgs {
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  let useOpenAI = false;
+  let useHostedModel = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
   let toolInput: string | undefined;
@@ -563,8 +560,8 @@ function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--openai") {
-      useOpenAI = true;
+    if (arg === "--hosted") {
+      useHostedModel = true;
       continue;
     }
 
@@ -590,7 +587,7 @@ function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useOpenAI,
+    useHostedModel,
     sessionId,
     toolName,
     toolInput,
@@ -624,7 +621,7 @@ async function main(): Promise<void> {
 
   if (parsed.prompt.length === 0) {
     console.error(
-      'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
+      'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
     );
     console.error("       bun run dev -- --tool cwd");
     console.error('       bun run dev -- --tool bash "pwd"');
@@ -632,16 +629,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    console.error("OPENAI_API_KEY is required when using --openai.");
+  const providerConfig = parsed.useHostedModel
+    ? await loadProviderConfig()
+    : undefined;
+
+  if (parsed.useHostedModel && !providerConfig) {
+    console.error("Run bun run setup:provider before using --hosted.");
     process.exit(1);
   }
 
   const projectInstructions = await ProjectInstructions.load(projectRoot);
   const modelContext = projectInstructions.toModelContext();
   const messageFactory = new AgentMessageFactory();
-  const modelClient = parsed.useOpenAI
-    ? new OpenAIModelClient()
+  const modelClient = providerConfig
+    ? new HostedModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -767,7 +768,7 @@ import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import type { ModelClient } from "@/model/model-client";
 import { ModelContext } from "@/model/model-context";
-import { buildModelInstructions } from "@/model/openai-model-client";
+import { buildModelInstructions } from "@/model/hosted-model-client";
 import { JsonlSessionStore } from "@/session/jsonl-session-store";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
@@ -989,7 +990,7 @@ You now have:
 - `ProjectInstructions` loading `AGENTS.md`
 - empty model context when the file is missing
 - `ModelContext` passed through `AgentLoop`
-- `OpenAIModelClient` using context without loading files
+- `HostedModelClient` using context without loading files
 - `JsonlSessionStore` still persisting only conversation messages
 - `cli.ts` composing project, session, tools, model, and agent objects
 

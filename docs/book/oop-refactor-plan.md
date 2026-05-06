@@ -37,7 +37,8 @@ src/
   model/
     model-client.ts
     echo-model-client.ts
-    openai-model-client.ts
+    hosted-model-client.ts
+    provider-config.ts
     model-context.ts
 
   tools/
@@ -74,7 +75,10 @@ before the chapter needs them.
 - `AgentLoop` owns orchestration once model calls, tool execution, model
   context, sessions, and project instructions interact.
 - `ModelClient` is an interface. Concrete providers are classes:
-  `EchoModelClient` and `OpenAIModelClient`.
+  `EchoModelClient` and `HostedModelClient`.
+- `ProviderConfig` owns the local hosted-provider connection shape. Provider
+  setup happens outside the agent through `scripts/setup-provider.ts`; provider
+  API keys belong on the hosted service, not in the CLI.
 - `ToolRegistry` is a class that owns lookup and execution dispatch.
 - Tools are objects that implement a shared `Tool` interface.
 - `SessionStore` is an interface. `JsonlSessionStore` implements persistence.
@@ -167,12 +171,12 @@ Chapter 2 can let `Conversation.runTurn()` create the fake assistant response.
 The chapter must explain that this is temporary: when a real model and tools
 arrive, orchestration will move to `AgentLoop`.
 
-### Chapter 3: Call One Model Provider
+### Chapter 3: Call One Hosted Model Provider
 
 Introduce the model boundary as objects, not factory functions. Add
-`ModelClient`, `EchoModelClient`, and `OpenAIModelClient`. Decide whether
-`Conversation.runTurn(prompt, modelClient)` is still acceptable for this chapter
-or whether this is the right point to introduce `AgentLoop`.
+`ModelClient`, `EchoModelClient`, `HostedModelClient`, and `ProviderConfig`.
+Keep subscription login and callback handling outside the agent for now as
+`scripts/setup-provider.ts`.
 
 Preferred direction: introduce `AgentLoop` here if it keeps `Conversation` from
 depending on model clients.
@@ -182,10 +186,17 @@ Likely files:
 - `src/agent/agent-loop.ts`
 - `src/model/model-client.ts`
 - `src/model/echo-model-client.ts`
-- `src/model/openai-model-client.ts`
+- `src/model/hosted-model-client.ts`
+- `src/model/provider-config.ts`
+- `scripts/setup-provider.ts`
 - existing `agent` files
 - `src/cli.ts`
 - tests around `AgentLoop`
+
+The chapter should use a setup script as the temporary product boundary:
+eventually it can choose a provider in the browser, receive a localhost callback
+from the hosted auth service, and write provider config. Do not add in-agent
+login commands in Chapter 3.
 
 ### Chapter 4: Add a Tool Boundary
 
@@ -268,7 +279,7 @@ Likely files:
 - `src/project/project-instructions.ts`
 - `src/model/model-context.ts`
 - `src/agent/agent-loop.ts`
-- `src/model/openai-model-client.ts`
+- `src/model/hosted-model-client.ts`
 
 ### Chapter 10: Build a Tiny Interactive Loop
 

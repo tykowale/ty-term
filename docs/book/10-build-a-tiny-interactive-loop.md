@@ -106,7 +106,7 @@ src/
     echo-model-client.ts
     model-client.ts
     model-context.ts
-    openai-model-client.ts
+    hosted-model-client.ts
   project/
     project-instructions.ts
   session/
@@ -136,7 +136,7 @@ Create `src/terminal/parse-args.ts`:
 
 ```ts
 export interface ParsedArgs {
-  readonly useOpenAI: boolean;
+  readonly useHostedModel: boolean;
   readonly interactive: boolean;
   readonly sessionId?: string;
   readonly toolName?: string;
@@ -145,7 +145,7 @@ export interface ParsedArgs {
 }
 
 export function parseArgs(args: string[]): ParsedArgs {
-  let useOpenAI = false;
+  let useHostedModel = false;
   let interactive = false;
   let sessionId: string | undefined;
   let toolName: string | undefined;
@@ -155,8 +155,8 @@ export function parseArgs(args: string[]): ParsedArgs {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
-    if (arg === "--openai") {
-      useOpenAI = true;
+    if (arg === "--hosted") {
+      useHostedModel = true;
       continue;
     }
 
@@ -193,7 +193,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   }
 
   return {
-    useOpenAI,
+    useHostedModel,
     interactive,
     sessionId,
     toolName,
@@ -376,7 +376,7 @@ import { AgentLoop } from "@/agent/agent-loop";
 import { AgentMessageFactory } from "@/agent/agent-message-factory";
 import { Conversation } from "@/agent/conversation";
 import { EchoModelClient } from "@/model/echo-model-client";
-import { OpenAIModelClient } from "@/model/openai-model-client";
+import { HostedModelClient } from "@/model/hosted-model-client";
 import { ProjectInstructions } from "@/project/project-instructions";
 import {
   JsonlSessionStore,
@@ -386,10 +386,7 @@ import { InteractiveLoop } from "@/terminal/interactive-loop";
 import { parseArgs } from "@/terminal/parse-args";
 import { BashTool } from "@/tools/bash-tool";
 import { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-import {
-  ReadFileTool,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
+import { ReadFileTool, resolveProjectRoot } from "@/tools/read-file-tool";
 import { ToolRegistry } from "@/tools/tool-registry";
 
 async function main(): Promise<void> {
@@ -419,7 +416,7 @@ async function main(): Promise<void> {
   if (!parsed.interactive && parsed.prompt.length === 0) {
     process.stderr.write(
       [
-        'Usage: bun run dev -- [--session id] [--openai] "your prompt"',
+        'Usage: bun run dev -- [--session id] [--hosted] "your prompt"',
         "       bun run dev -- --interactive",
         "       bun run dev -- --tool cwd",
         '       bun run dev -- --tool bash "pwd"',
@@ -430,16 +427,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (parsed.useOpenAI && !process.env.OPENAI_API_KEY) {
-    process.stderr.write("OPENAI_API_KEY is required when using --openai.\n");
+  const providerConfig = parsed.useHostedModel
+    ? await loadProviderConfig()
+    : undefined;
+
+  if (parsed.useHostedModel && !providerConfig) {
+    process.stderr.write("Run bun run setup:provider before using --hosted.\n");
     process.exit(1);
   }
 
   const projectInstructions = await ProjectInstructions.load(projectRoot);
   const modelContext = projectInstructions.toModelContext();
   const messageFactory = new AgentMessageFactory();
-  const modelClient = parsed.useOpenAI
-    ? new OpenAIModelClient()
+  const modelClient = providerConfig
+    ? new HostedModelClient(providerConfig)
     : new EchoModelClient();
   const modelToolRegistry = new ToolRegistry([
     new CurrentDirectoryTool(projectRoot),
@@ -644,13 +645,13 @@ Test the flags first:
 describe("parseArgs", () => {
   it("parses long and short interactive flags", () => {
     expect(parseArgs(["--interactive", "hello"])).toEqual({
-      useOpenAI: false,
+      useHostedModel: false,
       interactive: true,
       prompt: "hello",
     });
 
     expect(parseArgs(["-i", "--session", "lesson-10"])).toEqual({
-      useOpenAI: false,
+      useHostedModel: false,
       interactive: true,
       sessionId: "lesson-10",
       prompt: "",
@@ -888,10 +889,11 @@ Run a piped smoke test:
 printf "hello\n/exit\n" | bun run dev -- --interactive --session smoke
 ```
 
-Run with OpenAI:
+Run with the hosted provider path after setup:
 
 ```bash
-OPENAI_API_KEY=... bun run dev -- --interactive --openai
+bun run setup:provider
+bun run dev -- --interactive --hosted
 ```
 
 ## Verification
@@ -944,7 +946,7 @@ At this point, `ty-term` has the spine of a tiny terminal coding harness:
 - a TypeScript package rooted at `ty-term`
 - a conversation representation
 - a model client boundary
-- an OpenAI-backed model path
+- a hosted model path backed by setup-provider config
 - a no-key echo model for tests and learning
 - a tool definition and registry
 - manual tools for `cwd`, `bash`, and `read_file`
