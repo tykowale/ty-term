@@ -4,20 +4,12 @@ import { AgentMessageFactory } from "@/agent/agent-message-factory";
 export class Conversation {
   private readonly messages: AgentMessage[];
 
-  constructor(
-    private readonly messageFactory: AgentMessageFactory,
-    messages: readonly AgentMessage[] = [],
-  ) {
+  constructor(messages: readonly AgentMessage[] = []) {
     this.messages = [...messages];
   }
 
-  runTurn(prompt: string): void {
-    const userMessage = this.messageFactory.createUserMessage(prompt);
-    const assistantMessage = this.messageFactory.createAssistantMessage(
-      `agent heard: ${prompt}`,
-    );
-
-    this.messages.push(userMessage, assistantMessage);
+  appendMessages(...messages: AgentMessage[]) {
+    this.messages.push(...messages.map((message) => ({ ...message })));
   }
 
   getMessages(): AgentMessage[] {

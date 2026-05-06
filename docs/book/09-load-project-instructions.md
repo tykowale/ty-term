@@ -104,14 +104,10 @@ src/
     tool-registry.ts
     tool-request-parser.ts
   cli.ts
-  index.ts
 tests/
   project-instructions.test.ts
   model-context.test.ts
 ```
-
-`src/index.ts` remains a barrel file. It exports the new classes and types, but
-it does not contain project-loading behavior.
 
 ## ModelContext Is The Model-Facing Envelope
 
@@ -514,53 +510,6 @@ No ProjectInstructions.load()
 
 It receives `ModelContext` from the composition root and carries it through the
 turn. That is orchestration. File discovery stays outside the agent loop.
-
-## The Barrel File Exports Context
-
-Update `src/index.ts`:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { ModelContext } from "@/model/model-context";
-export {
-  OpenAIModelClient,
-  buildModelInstructions,
-  type OpenAIResponsesClient,
-} from "@/model/openai-model-client";
-export { ProjectInstructions } from "@/project/project-instructions";
-export {
-  JsonlSessionStore,
-  validateSessionId,
-} from "@/session/jsonl-session-store";
-export type { SessionStore } from "@/session/session-store";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export {
-  ReadFileTool,
-  resolveProjectFilePath,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-export {
-  ToolRequestParser,
-  type ToolRequest,
-} from "@/tools/tool-request-parser";
-```
-
-The barrel exports names. It still does not implement behavior.
 
 ## The CLI Composes Project Context
 

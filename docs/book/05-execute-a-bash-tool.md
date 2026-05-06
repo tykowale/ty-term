@@ -57,7 +57,6 @@ src/
     tool.ts
     tool-registry.ts
   cli.ts
-  index.ts
 tests/
   agent-loop.test.ts
   bash-tool.test.ts
@@ -91,7 +90,7 @@ export interface Tool {
 That is enough for bash. A bash command is just input to a tool named `bash`,
 and the result is text the harness can print.
 
-The tempting shortcut is to put a helper in `src/index.ts`:
+The tempting shortcut is to expose a loose helper:
 
 ```ts
 executeCommand(command);
@@ -276,34 +275,6 @@ constructor(
 That is not extra architecture for its own sake. It gives tests a clean way to
 exercise `BashTool` without spawning a process, while still letting the real CLI
 use the real shell runner.
-
-## The Barrel File Still Stays Boring
-
-`src/index.ts` should export `BashTool`; it should not implement bash:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-```
-
-This follows the Chapter 4 rule: `index.ts` is a public import surface, not a
-place for domain behavior.
 
 ## The CLI Composes The New Tool
 

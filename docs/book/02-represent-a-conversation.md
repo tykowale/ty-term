@@ -31,7 +31,6 @@ src/
     agent-message-factory.ts
     conversation.ts
   cli.ts
-  index.ts
 tests/
   conversation.test.ts
 ```
@@ -52,8 +51,8 @@ respondToPrompt(prompt: string): string
 ```
 
 That was useful for proving the workspace. It is a bad long-term home for agent
-behavior. If we keep adding to that function, or keep exporting more standalone
-helpers from `src/index.ts`, the book teaches the same problem it should help
+behavior. If we keep adding to that function, or keep creating more standalone
+helpers with no clear home, the book teaches the same problem it should help
 readers avoid: a pile of unrelated behavior with no clear owner.
 
 This chapter replaces that helper with two owners:
@@ -64,9 +63,6 @@ This chapter replaces that helper with two owners:
 The CLI remains a process adapter. It reads arguments and prints output. It does
 not know how messages are shaped, how history is stored, or how transcripts are
 formatted.
-
-The barrel file, `src/index.ts`, also gets simpler. It exports the public pieces
-from the `agent` folder, but it does not contain agent behavior itself.
 
 ## Message Data
 
@@ -572,7 +568,6 @@ The important pieces are:
 - `Conversation.runTurn()` appends one fake user/assistant exchange.
 - `Conversation.getMessages()` exposes safe snapshots, not the internal array.
 - `Conversation.renderTranscript()` turns structured state into terminal text.
-- `src/index.ts` becomes a barrel instead of a behavior dump.
 - `src/cli.ts` stays a process adapter.
 
 The simplification is also explicit: the assistant response is fake and local.

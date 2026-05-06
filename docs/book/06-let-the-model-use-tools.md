@@ -125,7 +125,6 @@ src/
     tool-registry.ts
     tool-request-parser.ts
   cli.ts
-  index.ts
 tests/
   agent-loop.test.ts
   bash-tool.test.ts
@@ -286,8 +285,8 @@ agent heard: hello
 ```
 
 Putting this in a class avoids an ad hoc string check inside `cli.ts` or a
-buried helper in `index.ts`. `AgentLoop` can ask a parser whether assistant text
-contains a request, and the parser can evolve later when the protocol becomes
+buried helper. `AgentLoop` can ask a parser whether assistant text contains a
+request, and the parser can evolve later when the protocol becomes
 structured.
 
 ## The Echo Model Simulates Tool Use
@@ -504,38 +503,6 @@ Those limits prevent accidental infinite loops. A production agent eventually
 needs a repeated loop with iteration limits, cancellation, approvals, and
 structured events. This chapter teaches the first complete shape before adding
 those guardrails.
-
-## The Barrel File Exports Objects, Not Behavior
-
-`src/index.ts` stays boring:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-export {
-  ToolRequestParser,
-  type ToolRequest,
-} from "@/tools/tool-request-parser";
-```
-
-There is still no `runTurnWithTools()` helper in this file. That behavior has a
-home now: `AgentLoop`.
 
 ## The CLI Uses Two Registries
 

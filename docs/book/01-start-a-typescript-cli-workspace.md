@@ -281,7 +281,7 @@ Bun's bundler turns that source graph into `dist/cli.js`. The invariant is simpl
 
 The CLI owns process side effects. The placeholder function owns the fake behavior for this one chapter.
 
-The separation is the pattern this book keeps using, but the owner will change. A single standalone function is fine for proving the workspace. It would be a poor home for a real agent. Once we need messages, history, providers, tools, and sessions, each concept gets an object boundary instead of being jammed into `index.ts` or `cli.ts`.
+The separation is the pattern this book keeps using, but the owner will change. A single standalone function is fine for proving the workspace. It would be a poor home for a real agent. Once we need messages, history, providers, tools, and sessions, each concept gets an object boundary instead of being jammed into `cli.ts`.
 
 ## Reference Note
 

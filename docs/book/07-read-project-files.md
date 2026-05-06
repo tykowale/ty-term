@@ -54,7 +54,7 @@ The harness decides whether that path is safe.
 That gives us these rules:
 
 - `package.json` is allowed.
-- `src/index.ts` is allowed.
+- `src/cli.ts` is allowed.
 - `subdir/../README.md` is allowed if it normalizes inside the project.
 - `/etc/passwd` is rejected.
 - `../secret.txt` is rejected.
@@ -121,7 +121,6 @@ src/
     tool-registry.ts
     tool-request-parser.ts
   cli.ts
-  index.ts
 tests/
   agent-loop.test.ts
   read-file-tool.test.ts
@@ -138,8 +137,8 @@ supports tool input:
 TOOL read_file: package.json
 ```
 
-So this chapter should not add a `parseToolRequest()` helper or move parsing
-back into `index.ts`.
+So this chapter should not add a loose `parseToolRequest()` helper or move
+parsing out of `ToolRequestParser`.
 
 ## The ReadFileTool
 
@@ -389,44 +388,6 @@ model response -> parser -> registry -> tool message -> final model response
 ```
 
 It does not own file paths.
-
-## The Barrel File Exports The Tool
-
-`src/index.ts` remains a public import surface:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export {
-  ReadFileTool,
-  resolveProjectFilePath,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-export {
-  ToolRequestParser,
-  type ToolRequest,
-} from "@/tools/tool-request-parser";
-```
-
-There is still no `createReadFileTool()`, no `parseToolRequest()`, and no
-`runTurnWithTools()` in this file. Those would pull behavior back into the
-barrel.
 
 ## The CLI Composes Two Registries
 

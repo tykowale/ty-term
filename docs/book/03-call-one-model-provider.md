@@ -39,7 +39,6 @@ src/
     echo-model-client.ts
     openai-model-client.ts
   cli.ts
-  index.ts
 tests/
   agent-loop.test.ts
 ```
@@ -309,24 +308,6 @@ deliberate design change, not an accident caused by mutation order.
 
 The loop also does not render anything. Rendering still belongs to
 `Conversation`, and printing still belongs to `cli.ts`.
-
-## The Barrel File
-
-`src/index.ts` remains a barrel. It exports the public objects without
-implementing behavior:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-```
-
-This rule matters more as the book grows. `index.ts` is a public import surface,
-not a junk drawer for agent behavior.
 
 ## The CLI Composes Dependencies
 
@@ -611,7 +592,7 @@ We are deliberately not adding:
 
 Those are real concerns, but adding them here would hide the lesson. The lesson
 is that a model call is a boundary, and orchestration belongs in `AgentLoop`, not
-in `Conversation`, `cli.ts`, or `index.ts`.
+in `Conversation` or `cli.ts`.
 
 ## Handoff To Chapter 4
 
@@ -639,5 +620,4 @@ AgentLoop orchestrates the turn.
 ToolRegistry owns tool lookup and execution dispatch.
 ```
 
-Do not put tool helpers back into `src/index.ts`, and do not make `cli.ts`
-execute tools directly.
+Do not make `cli.ts` execute tools directly.

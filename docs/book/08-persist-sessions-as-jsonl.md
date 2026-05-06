@@ -47,8 +47,8 @@ Each line is one plain message record:
 {"role":"assistant","content":"agent heard: hello"}
 ```
 
-The new boundary is not a pair of `loadSession()` and `saveSession()` helpers in
-`src/index.ts`. Persistence deserves an owner:
+The new boundary is not a pair of loose `loadSession()` and `saveSession()`
+helpers. Persistence deserves an owner:
 
 ```text
 SessionStore describes the storage contract.
@@ -127,14 +127,10 @@ src/
     tool-registry.ts
     tool-request-parser.ts
   cli.ts
-  index.ts
 tests/
   session-store.test.ts
   session-resume.test.ts
 ```
-
-`src/index.ts` remains a barrel file. It exports the new classes, but it does
-not contain session behavior.
 
 ## Conversation Can Be Rebuilt
 
@@ -427,48 +423,9 @@ characters inside the JSON string, so this message:
 
 is stored as one physical JSONL line.
 
-## The Barrel File Exports Storage
-
-Update `src/index.ts` so it stays a barrel:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-export {
-  JsonlSessionStore,
-  validateSessionId,
-} from "@/session/jsonl-session-store";
-export type { SessionStore } from "@/session/session-store";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export {
-  ReadFileTool,
-  resolveProjectFilePath,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-export {
-  ToolRequestParser,
-  type ToolRequest,
-} from "@/tools/tool-request-parser";
-```
-
-This file still should not contain `loadSessionMessages()`,
-`appendSessionMessages()`, or `runSessionTurn()`. The first two belong to
-`JsonlSessionStore`. The third is not a domain concept; it is CLI composition.
+Avoid loose `loadSessionMessages()`, `appendSessionMessages()`, or
+`runSessionTurn()` helpers. The first two belong to `JsonlSessionStore`. The
+third is not a domain concept; it is CLI composition.
 
 ## The CLI Composes Persistence
 

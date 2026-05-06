@@ -123,13 +123,9 @@ src/
     tool-registry.ts
     tool-request-parser.ts
   cli.ts
-  index.ts
 tests/
   interactive-loop.test.ts
 ```
-
-`src/index.ts` stays a barrel file. It exports the terminal objects, but it does
-not implement terminal behavior.
 
 ## Parse Arguments Outside The CLI
 
@@ -522,55 +518,6 @@ const modelContext = projectInstructions.toModelContext();
 That context is passed into `InteractiveLoop`. The loop does not call
 `ProjectInstructions.load()`, and the session store still persists only
 conversation messages.
-
-## Export The Terminal Boundary
-
-Update `src/index.ts`:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { ModelContext } from "@/model/model-context";
-export {
-  OpenAIModelClient,
-  buildModelInstructions,
-  type OpenAIResponsesClient,
-} from "@/model/openai-model-client";
-export { ProjectInstructions } from "@/project/project-instructions";
-export {
-  JsonlSessionStore,
-  validateSessionId,
-} from "@/session/jsonl-session-store";
-export type { SessionStore } from "@/session/session-store";
-export { InteractiveLoop } from "@/terminal/interactive-loop";
-export { parseArgs, type ParsedArgs } from "@/terminal/parse-args";
-export {
-  BashTool,
-  formatCommandResult,
-  runShellCommand,
-  type CommandOptions,
-  type CommandResult,
-  type CommandRunner,
-} from "@/tools/bash-tool";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export {
-  ReadFileTool,
-  resolveProjectFilePath,
-  resolveProjectRoot,
-} from "@/tools/read-file-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-export {
-  ToolRequestParser,
-  type ToolRequest,
-} from "@/tools/tool-request-parser";
-```
-
-Again, the barrel exports names. It does not become the place where logic lives.
 
 ## Display Only The Current Turn
 
@@ -1025,4 +972,4 @@ cli.ts
 
 That is the teaching target of the book: each object has a job, and the terminal
 experience is built by composing those jobs rather than jamming them into
-`index.ts` or `cli.ts`.
+`cli.ts`.

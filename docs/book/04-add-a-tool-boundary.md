@@ -18,8 +18,8 @@ Or it could opt into the real provider with `--openai`.
 
 What the harness still cannot do is describe an action it can take outside the
 model. A coding agent eventually needs to read files, inspect directories, and
-run commands. Those actions should not become random helper functions in
-`src/index.ts`, and they should not become ad hoc branches inside `cli.ts`.
+run commands. Those actions should not become random helper functions, and they
+should not become ad hoc branches inside `cli.ts`.
 
 This chapter adds the first tool boundary.
 
@@ -39,7 +39,6 @@ src/
     tool-registry.ts
     current-directory-tool.ts
   cli.ts
-  index.ts
 tests/
   agent-loop.test.ts
   tool-registry.test.ts
@@ -219,26 +218,6 @@ capability.
 The registry also does not return its internal `Map`. Returning the map would
 let callers mutate the registered tools from the outside. A chapter this small
 is a good place to teach that habit: expose behavior, not internal storage.
-
-## The Barrel File Stays Boring
-
-`src/index.ts` should export the new objects, not implement them:
-
-```ts
-export { AgentLoop } from "@/agent/agent-loop";
-export type { AgentMessage, AgentRole } from "@/agent/agent-message";
-export { AgentMessageFactory } from "@/agent/agent-message-factory";
-export { Conversation } from "@/agent/conversation";
-export { EchoModelClient } from "@/model/echo-model-client";
-export type { ModelClient } from "@/model/model-client";
-export { OpenAIModelClient } from "@/model/openai-model-client";
-export { CurrentDirectoryTool } from "@/tools/current-directory-tool";
-export type { Tool } from "@/tools/tool";
-export { ToolRegistry } from "@/tools/tool-registry";
-```
-
-This is the only role `index.ts` gets. It is a public import surface, not a
-place to hide behavior that did not have an obvious home.
 
 ## The CLI Proves The Boundary
 
@@ -582,7 +561,7 @@ The only visible behavior is manual tool execution through the CLI.
 
 That is enough for one chapter. The reader can see where tools live, how they
 are registered, how duplicate names are rejected, and how one execution path
-works without mixing tool logic into `index.ts`, `cli.ts`, or `AgentLoop`.
+works without mixing tool logic into `cli.ts` or `AgentLoop`.
 
 ## Handoff To Chapter 5
 

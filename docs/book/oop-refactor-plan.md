@@ -9,10 +9,9 @@ to understand.
 ## Problem
 
 The first draft of the book keeps adding exported functions, types, and helpers
-to `src/index.ts`, while `src/cli.ts` absorbs more and more orchestration. That
-keeps early chapters short, but it teaches the wrong architecture:
+without clear owners, while `src/cli.ts` absorbs more and more orchestration.
+That keeps early chapters short, but it teaches the wrong architecture:
 
-- `index.ts` becomes a god module.
 - `cli.ts` becomes a mix of process I/O, argument parsing, dependency creation,
   and agent behavior.
 - Standalone functions such as `createUserMessage()`, `runTurn()`,
@@ -28,7 +27,6 @@ Use a small OOP spine:
 ```text
 src/
   cli.ts
-  index.ts
 
   agent/
     agent-message.ts
@@ -84,8 +82,6 @@ before the chapter needs them.
 - `InteractiveLoop` owns terminal loop behavior.
 - `cli.ts` only parses process arguments, composes dependencies, handles process
   I/O, and calls the relevant object.
-- `index.ts` should become a barrel file at most. It should not accumulate
-  domain behavior.
 
 The long-term dependency direction should be:
 
@@ -121,15 +117,13 @@ instead of pushing more behavior into the lower-level class.
 
 ### Chapter 1: Start a Bun TypeScript CLI
 
-Keep setup small, but stop implying that `src/index.ts` is where all future
-logic belongs. Chapter 1 may still use a placeholder response function, but it
-should frame it as temporary scaffolding. The handoff should say Chapter 2 will
-replace the placeholder with `AgentMessageFactory` and `Conversation`.
+Keep setup small. Chapter 1 may still use a placeholder response function, but
+it should frame it as temporary scaffolding. The handoff should say Chapter 2
+will replace the placeholder with `AgentMessageFactory` and `Conversation`.
 
 Likely files:
 
 - `src/cli.ts`
-- `src/index.ts`
 - `tests/respond-to-prompt.test.ts`
 
 Oracle:
@@ -155,7 +149,6 @@ Likely files:
 - `src/agent/agent-message.ts`
 - `src/agent/agent-message-factory.ts`
 - `src/agent/conversation.ts`
-- `src/index.ts`
 - `src/cli.ts`
 - `tests/conversation.test.ts`
 
@@ -197,7 +190,7 @@ Likely files:
 ### Chapter 4: Add a Tool Boundary
 
 Introduce `Tool` and `ToolRegistry` as objects. Avoid loose helpers such as
-`createToolRegistry()`, `getTool()`, and `executeTool()` in `index.ts`.
+`createToolRegistry()`, `getTool()`, and `executeTool()`.
 
 Likely files:
 
